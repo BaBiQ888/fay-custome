@@ -91,6 +91,7 @@ class ASRWebSocketServer:
     def _create_asr_instance(self, mode, username):
         """创建ASR实例"""
         if mode == "ali":
+            print("aliyun asr created")
             return ALiNls(username)
         elif mode in ["funasr", "sensevoice"]:
             return FunASR(username)
