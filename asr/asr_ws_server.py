@@ -18,6 +18,7 @@ class ASRWebSocketServer:
 
     async def handle_client(self, websocket, path):
         client_id = f"asr_client_{id(websocket)}"
+        print("client connected", client_id)
         asr_instance = None
 
         try:
