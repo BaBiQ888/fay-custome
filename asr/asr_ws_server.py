@@ -30,6 +30,16 @@ class ASRWebSocketServer:
                         asr_instance = self._create_asr_instance(
                             asr_mode, client_id)
 
+                        asr_instance.set_result_callback(
+                            lambda text, is_final: asyncio.run_coroutine_threadsafe(
+                                websocket.send(json.dumps({
+                                    'type': 'result',
+                                    'text': text,
+                                    'is_final': is_final
+                                })), self.loop
+                            )
+                        )
+
                         self.clients[client_id] = {
                             'websocket': websocket,
                             'asr': asr_instance,
