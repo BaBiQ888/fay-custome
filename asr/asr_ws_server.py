@@ -90,6 +90,7 @@ class ASRWebSocketServer:
                 del self.clients[client_id]
 
     def _create_asr_instance(self, mode, username):
+        print("create asr instance", mode, username)
         """创建ASR实例"""
         if mode == "ali":
             return ALiNls(username)
