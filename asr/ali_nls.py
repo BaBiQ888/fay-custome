@@ -71,7 +71,12 @@ class ALiNls:
         self.__endding = False
         self.__is_close = False
         self.lock = Lock()
+        self.result_callback = None  # 添加回调函数
         print("aliyun asr created")
+
+    def set_result_callback(self, callback):
+        """设置结果回调函数"""
+        self.result_callback = callback
 
     def __create_header(self, name):
         if name == 'StartTranscription':
@@ -91,11 +96,19 @@ class ALiNls:
             data = json.loads(message)
             header = data['header']
             name = header['name']
+
             if name == 'TranscriptionStarted':
                 self.started = True
-            if name == 'SentenceEnd':
+
+            elif name == 'SentenceEnd':
                 self.done = True
                 self.finalResults = data['payload']['result']
+
+                # 调用回调函数通知ASR服务器
+                if self.result_callback:
+                    self.result_callback(self.finalResults, True)
+
+                # 保持原有的wsa_server通知逻辑
                 if wsa_server.get_web_instance().is_connected(self.username):
                     wsa_server.get_web_instance().add_cmd(
                         {"panelMsg": self.finalResults, "Username": self.username})
@@ -103,9 +116,16 @@ class ALiNls:
                     content = {'Topic': 'human', 'Data': {
                         'Key': 'log', 'Value': self.finalResults}, 'Username': self.username}
                     wsa_server.get_instance().add_cmd(content)
-                ws.close()  # TODO
+                ws.close()
+
             elif name == 'TranscriptionResultChanged':
                 self.finalResults = data['payload']['result']
+
+                # 调用回调函数通知中间结果
+                if self.result_callback:
+                    self.result_callback(self.finalResults, False)
+
+                # 保持原有的wsa_server通知逻辑
                 if wsa_server.get_web_instance().is_connected(self.username):
                     wsa_server.get_web_instance().add_cmd(
                         {"panelMsg": self.finalResults, "Username": self.username})
