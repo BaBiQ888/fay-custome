@@ -30,7 +30,7 @@ class ASRWebSocketServer:
                     print("client connected2", client_id)
                     # 处理控制消息
                     data = json.loads(message)
-
+                    print("client connected3", client_id)
                     if data.get('action') == 'start':
                         # 启动ASR
                         asr_mode = data.get('mode', cfg.ASR_mode)
