@@ -12,6 +12,7 @@ from core import wsa_server
 from utils import config_util as cfg
 from utils import util
 
+
 class FunASR:
     # 初始化
     def __init__(self, username):
@@ -29,18 +30,21 @@ class FunASR:
         self.username = username
         self.started = True
 
-    
     # 收到websocket消息的处理
+
     def on_message(self, ws, message):
         try:
+            print(message)
             self.done = True
             self.finalResults = message
             if wsa_server.get_web_instance().is_connected(self.username):
-                wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+                wsa_server.get_web_instance().add_cmd(
+                    {"panelMsg": self.finalResults, "Username": self.username})
             if wsa_server.get_instance().is_connected(self.username):
-                content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
+                content = {'Topic': 'human', 'Data': {
+                    'Key': 'log', 'Value': self.finalResults}, 'Username': self.username}
                 wsa_server.get_instance().add_cmd(content)
-   
+
         except Exception as e:
             print(e)
 
@@ -62,7 +66,7 @@ class FunASR:
         # util.printInfo(1, self.username, f"### error:{error}")
         self.__ws = None
 
-    #重连
+    # 重连
     def __attempt_reconnect(self):
         if not self.__reconnecting:
             self.__reconnecting = True
@@ -70,12 +74,12 @@ class FunASR:
             while not self.__connected:
                 time.sleep(self.__reconnect_delay)
                 self.start()
-                self.__reconnect_delay *= 2  
-            self.__reconnect_delay = 1  
+                self.__reconnect_delay *= 2
+            self.__reconnect_delay = 1
             self.__reconnecting = False
 
-
     # 收到websocket连接建立的处理
+
     def on_open(self, ws):
         self.__connected = True
 
@@ -102,7 +106,8 @@ class FunASR:
         self.done = False
         self.__frames.clear()
         websocket.enableTrace(False)
-        self.__ws = websocket.WebSocketApp(self.__URL, on_message=self.on_message,on_close=self.on_close,on_error=self.on_error)
+        self.__ws = websocket.WebSocketApp(
+            self.__URL, on_message=self.on_message, on_close=self.on_close, on_error=self.on_error)
         self.__ws.on_open = self.on_open
 
         self.__ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
@@ -114,14 +119,14 @@ class FunASR:
         self.__frames.append(buf)
 
     def send_url(self, url):
-        frame = {'url' : url}
+        frame = {'url': url}
         self.__ws.send(json.dumps(frame))
 
     def start(self):
         Thread(target=self.__connect, args=[]).start()
         data = {
-                'vad_need':False,
-                'state':'StartTranscription'
+            'vad_need': False,
+            'state': 'StartTranscription'
         }
         self.add_frame(data)
 
@@ -135,7 +140,7 @@ class FunASR:
                     elif type(frame) == bytes:
                         self.__ws.send(frame, websocket.ABNF.OPCODE_BINARY)
                 self.__frames.clear()
-                frame = {'vad_need':False,'state':'StopTranscription'}
+                frame = {'vad_need': False, 'state': 'StopTranscription'}
                 self.__ws.send(json.dumps(frame))
             except Exception as e:
                 print(e)
