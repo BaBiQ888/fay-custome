@@ -56,3 +56,9 @@ start_mode=web
 #服务器主动地址
 fay_url=http://127.0.0.1:5001
 
+# 新增ASR WebSocket服务配置
+asr_ws_enabled=true
+asr_ws_host=0.0.0.0
+asr_ws_port=10199
+asr_ws_port=10199
+

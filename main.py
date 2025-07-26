@@ -1,6 +1,7 @@
 # 入口文件main
 from core.interact import Interact
 from scheduler.thread_manager import MyThread
+from asr.asr_ws_server import get_asr_server
 import fay_booter
 from core import content_db
 from gui import flask_server
@@ -137,6 +138,9 @@ if __name__ == '__main__':
     # 启动阿里云asr
     if config_util.ASR_mode == "ali":
         ali_nls.start()
+        asr_server = get_asr_server(host="0.0.0.0", port=10199)
+        asr_server.start_server()
+        print("ASR WebSocket服务已启动在端口 10199")
 
     # 启动http服务器
     flask_server.start()
