@@ -22,6 +22,7 @@ class ASRWebSocketServer:
         asr_instance = None
 
         try:
+            print("client connected1", client_id)
             logger.info(f"Client {client_id} connected")
 
             async for message in websocket:
