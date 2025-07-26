@@ -12,7 +12,8 @@ logger.setLevel(logging.CRITICAL)
 
 # 解析命令行参数
 parser = argparse.ArgumentParser()
-parser.add_argument("--host", type=str, default="0.0.0.0", help="host ip, localhost, 0.0.0.0")
+parser.add_argument("--host", type=str, default="0.0.0.0",
+                    help="host ip, localhost, 0.0.0.0")
 parser.add_argument("--port", type=int, default=10197, help="grpc server port")
 parser.add_argument("--ngpu", type=int, default=1, help="0 for cpu, 1 for gpu")
 args = parser.parse_args()
@@ -25,6 +26,7 @@ asr_model = AutoModel(model="paraformer-zh", model_revision="v2.0.4",
 print("model loaded")
 websocket_users = {}
 task_queue = asyncio.Queue()
+
 
 async def ws_serve(websocket, path):
     global websocket_users
@@ -47,14 +49,17 @@ async def ws_serve(websocket, path):
         await websocket.close()
         logger.info("WebSocket closed")
 
+
 async def worker():
     while True:
         websocket, url = await task_queue.get()
         if websocket.open:
             await process_wav_file(websocket, url)
         else:
-            logger.info("WebSocket connection is already closed when trying to process file")
+            logger.info(
+                "WebSocket connection is already closed when trying to process file")
         task_queue.task_done()
+
 
 async def process_wav_file(websocket, url):
     # 热词
@@ -77,8 +82,10 @@ async def process_wav_file(websocket, url):
         if os.path.exists(wav_path):
             os.remove(wav_path)
 
+
 async def main():
-    start_server = websockets.serve(ws_serve, args.host, args.port, ping_interval=10)
+    start_server = websockets.serve(
+        ws_serve, args.host, args.port, ping_interval=10)
     await start_server
     worker_task = asyncio.create_task(worker())
     await worker_task
