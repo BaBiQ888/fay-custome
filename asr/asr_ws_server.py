@@ -18,61 +18,60 @@ class ASRWebSocketServer:
 
     async def handle_client(self, websocket, path):
         client_id = f"asr_client_{id(websocket)}"
-        print("client connected", client_id)
         asr_instance = None
 
         try:
-            print("client connected1", client_id)
-            logger.info(f"Client {client_id} connected")
-
             async for message in websocket:
                 if isinstance(message, str):
-                    print("client connected2", client_id)
-                    # 处理控制消息
                     data = json.loads(message)
-                    print("client connected3", client_id)
                     if data.get('action') == 'start':
-                        # 启动ASR
+                        # 创建ASR实例但不立即启动
                         asr_mode = data.get('mode', cfg.ASR_mode)
                         asr_instance = self._create_asr_instance(
                             asr_mode, client_id)
-                        asr_instance.start()
+
                         self.clients[client_id] = {
                             'websocket': websocket,
-                            'asr': asr_instance
+                            'asr': asr_instance,
+                            'started': False  # 标记未启动
                         }
+
                         await websocket.send(json.dumps({
-                            'status': 'started',
-                            'mode': asr_mode
+                            'status': 'ready',  # 改为ready状态
+                            'mode': asr_mode,
+                            'message': 'ASR instance created, waiting for audio data'
                         }))
 
-                    elif data.get('action') == 'stop':
-                        # 停止ASR
-                        if asr_instance:
-                            asr_instance.end()
-                            final_result = getattr(
-                                asr_instance, 'finalResults', '')
-                            await websocket.send(json.dumps({
-                                'status': 'stopped',
-                                'final_result': final_result
-                            }))
-                        break
-
                 elif isinstance(message, bytes):
-                    # 处理音频数据
-                    if asr_instance:
-                        asr_instance.send(message)
+                    # 收到第一个音频数据时才启动ASR
+                    if asr_instance and not self.clients[client_id].get('started', False):
+                        asr_instance.start()
+                        while not asr_instance.started:
+                            await asyncio.sleep(0.01)
 
-                        # 检查是否有新的识别结果
-                        if hasattr(asr_instance, 'finalResults') and asr_instance.finalResults:
-                            await websocket.send(json.dumps({
-                                'type': 'result',
-                                'text': asr_instance.finalResults,
-                                'is_final': asr_instance.done
-                            }))
+                    self.clients[client_id]['started'] = True
+                    print(f"ASR实例已启动: {client_id}")
 
-                            if asr_instance.done:
-                                asr_instance.done = False
+                    # 通知客户端ASR已启动
+                    await websocket.send(json.dumps({
+                        'status': 'started',
+                        'message': 'ASR started, processing audio'
+                    }))
+
+                # 发送音频数据
+                if asr_instance and self.clients[client_id].get('started', False):
+                    asr_instance.send(message)
+
+                    # 检查是否有新的识别结果
+                    if hasattr(asr_instance, 'finalResults') and asr_instance.finalResults:
+                        await websocket.send(json.dumps({
+                            'type': 'result',
+                            'text': asr_instance.finalResults,
+                            'is_final': asr_instance.done
+                        }))
+
+                        if asr_instance.done:
+                            asr_instance.done = False
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client {client_id} disconnected")
