@@ -27,6 +27,7 @@ class ASRWebSocketServer:
 
             async for message in websocket:
                 if isinstance(message, str):
+                    print("client connected2", client_id)
                     # 处理控制消息
                     data = json.loads(message)
 
@@ -91,7 +92,6 @@ class ASRWebSocketServer:
     def _create_asr_instance(self, mode, username):
         """创建ASR实例"""
         if mode == "ali":
-            print("aliyun asr created")
             return ALiNls(username)
         elif mode in ["funasr", "sensevoice"]:
             return FunASR(username)
