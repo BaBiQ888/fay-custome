@@ -110,7 +110,7 @@ def console_listener():
                 fay_booter.stop()
                 time.sleep(0.1)
                 util.log(1, '程序正在退出..')
-            ports = [10001, 10002, 10003, 5001, 9001]
+            ports = [10001, 10002, 10003, 5001, 9001, 10199]
             for port in ports:
                 kill_process_by_port(port)
             sys.exit(0)
