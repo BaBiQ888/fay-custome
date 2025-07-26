@@ -38,9 +38,12 @@ def __post_token():
     authorize = Authorize_Tb()
     authorize_info = authorize.find_by_userid(cfg.key_ali_nls_key_id)
     if authorize_info is not None:
-       authorize.update_by_userid(cfg.key_ali_nls_key_id, _token, info['Token']['ExpireTime']*1000)
+        authorize.update_by_userid(
+            cfg.key_ali_nls_key_id, _token, info['Token']['ExpireTime']*1000)
     else:
-       authorize.add(cfg.key_ali_nls_key_id, _token, info['Token']['ExpireTime']*1000) 
+        authorize.add(cfg.key_ali_nls_key_id, _token,
+                      info['Token']['ExpireTime']*1000)
+
 
 def __runnable():
     while __running:
@@ -68,6 +71,7 @@ class ALiNls:
         self.__endding = False
         self.__is_close = False
         self.lock = Lock()
+        print("aliyun asr created")
 
     def __create_header(self, name):
         if name == 'StartTranscription':
@@ -93,17 +97,21 @@ class ALiNls:
                 self.done = True
                 self.finalResults = data['payload']['result']
                 if wsa_server.get_web_instance().is_connected(self.username):
-                    wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+                    wsa_server.get_web_instance().add_cmd(
+                        {"panelMsg": self.finalResults, "Username": self.username})
                 if wsa_server.get_instance().is_connected(self.username):
-                    content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
+                    content = {'Topic': 'human', 'Data': {
+                        'Key': 'log', 'Value': self.finalResults}, 'Username': self.username}
                     wsa_server.get_instance().add_cmd(content)
-                ws.close()#TODO
+                ws.close()  # TODO
             elif name == 'TranscriptionResultChanged':
                 self.finalResults = data['payload']['result']
                 if wsa_server.get_web_instance().is_connected(self.username):
-                    wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+                    wsa_server.get_web_instance().add_cmd(
+                        {"panelMsg": self.finalResults, "Username": self.username})
                 if wsa_server.get_instance().is_connected(self.username):
-                    content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
+                    content = {'Topic': 'human', 'Data': {
+                        'Key': 'log', 'Value': self.finalResults}, 'Username': self.username}
                     wsa_server.get_instance().add_cmd(content)
 
         except Exception as e:
@@ -118,15 +126,16 @@ class ALiNls:
     # 收到websocket错误的处理
     def on_error(self, ws, error):
         print("aliyun asr error:", error)
-        self.started = True #避免在aliyun asr出错时，recorder一直等待start状态返回
+        self.started = True  # 避免在aliyun asr出错时，recorder一直等待start状态返回
 
     # 收到websocket连接建立的处理
     def on_open(self, ws):
         self.__endding = False
-        #为了兼容多路asr，关闭过程数据
+        # 为了兼容多路asr，关闭过程数据
+
         def run(*args):
             while self.__endding == False:
-                try: 
+                try:
                     if len(self.__frames) > 0:
                         with self.lock:
                             frame = self.__frames.pop(0)
@@ -152,7 +161,8 @@ class ALiNls:
         self.done = False
         with self.lock:
             self.__frames.clear()
-        self.__ws = websocket.WebSocketApp(self.__URL + '?token=' + _token, on_message=self.on_message)
+        self.__ws = websocket.WebSocketApp(
+            self.__URL + '?token=' + _token, on_message=self.on_message)
         self.__ws.on_open = self.on_open
         self.__ws.on_error = self.on_error
         self.__ws.on_close = self.on_close
