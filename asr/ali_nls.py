@@ -93,6 +93,7 @@ class ALiNls:
     # 收到websocket消息的处理
     def on_message(self, ws, message):
         try:
+            print("aliyun asr message:", message)
             data = json.loads(message)
             header = data['header']
             name = header['name']
