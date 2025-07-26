@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
         # 清空缓存
         profile = QWebEngineProfile.defaultProfile()
         profile.clearHttpCache()
-        self.browser.load(QUrl('http://127.0.0.1:5000'))
+        self.browser.load(QUrl('http://127.0.0.1:5001'))
         self.setCentralWidget(self.browser)
         MyThread(target=self.runnable).start()
 

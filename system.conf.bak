@@ -54,5 +54,5 @@ proxy_config=
 start_mode=web
 
 #服务器主动地址
-fay_url=http://127.0.0.1:5000
+fay_url=http://127.0.0.1:5001
 
