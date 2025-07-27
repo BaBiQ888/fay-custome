@@ -39,51 +39,19 @@ class ASRWebSocketServer:
                     print(f"[ASR-Server] ← 收到控制消息: {data}")
 
                     if data.get('action') == 'start':
-                        # 创建ASR实例
+                        # 如果已有实例，先清理
+                        if asr_instance:
+                            print(f"[ASR-Server] 清理现有ASR实例")
+                            asr_instance.end()
+                            asr_instance = None
+
+                        # 创建新的ASR实例
                         asr_mode = data.get('mode', cfg.ASR_mode)
 
                         try:
+                            print(f"[ASR-Server] 🚀 创建新ASR实例 - 模式: {asr_mode}")
                             asr_instance = self._create_asr_instance(
                                 asr_mode, client_id)
-
-                            # 启动ASR实例
-                            asr_instance.start()
-
-                            # 等待连接建立，增加超时检查
-                            max_wait_time = 10.0  # 增加等待时间
-                            wait_start = time.time()
-                            connection_established = False
-
-                            while (time.time() - wait_start) < max_wait_time:
-                                if asr_instance.started:
-                                    # 对于阿里云ASR，额外检查连接状态
-                                    if hasattr(asr_instance, '_ALiNls__is_close'):
-                                        if not asr_instance._ALiNls__is_close:
-                                            connection_established = True
-                                            break
-                                        else:
-                                            logger.warning(
-                                                f"[{client_id}] 检测到ASR连接已断开，尝试重连")
-                                            # 重新创建实例
-                                            asr_instance.end()
-                                            asr_instance = self._create_asr_instance(
-                                                asr_mode, client_id)
-                                            asr_instance.start()
-                                            await asyncio.sleep(1)  # 等待重连
-                                            continue
-                                    else:
-                                        connection_established = True
-                                        break
-                                await asyncio.sleep(0.1)
-
-                            if not connection_established:
-                                logger.error(
-                                    f"[{client_id}] ASR连接建立失败，超时或连接断开")
-                                await websocket.send(json.dumps({
-                                    'status': 'error',
-                                    'message': 'ASR connection failed - timeout or disconnected'
-                                }))
-                                continue
 
                             # 设置回调函数
                             def result_callback(text, is_final):
@@ -122,11 +90,48 @@ class ASRWebSocketServer:
 
                             asr_instance.set_result_callback(result_callback)
 
+                            # 启动ASR实例
+                            print(f"[ASR-Server] 🎯 启动ASR实例...")
+                            asr_instance.start()
+
+                            # 等待连接建立
+                            max_wait_time = 15.0  # 增加等待时间
+                            wait_start = time.time()
+                            connection_established = False
+
+                            while (time.time() - wait_start) < max_wait_time:
+                                if asr_instance.started:
+                                    # 对于阿里云ASR，额外检查连接状态
+                                    if hasattr(asr_instance, '_ALiNls__is_close'):
+                                        if not asr_instance._ALiNls__is_close:
+                                            connection_established = True
+                                            print(f"[ASR-Server] ✅ ASR连接建立成功")
+                                            break
+                                        else:
+                                            logger.warning(
+                                                f"[{client_id}] 检测到ASR连接已断开")
+                                            break
+                                    else:
+                                        connection_established = True
+                                        print(f"[ASR-Server] ✅ ASR连接建立成功")
+                                        break
+                                await asyncio.sleep(0.1)
+
+                            if not connection_established:
+                                logger.error(
+                                    f"[{client_id}] ASR连接建立失败，超时或连接断开")
+                                await websocket.send(json.dumps({
+                                    'status': 'error',
+                                    'message': 'ASR connection failed - timeout or disconnected'
+                                }))
+                                continue
+
+                            # 更新客户端状态
                             self.clients[client_id] = {
                                 'websocket': websocket,
                                 'asr': asr_instance,
-                                'started': False,
-                                'asr_started': False,
+                                'started': True,
+                                'asr_started': True,  # 标记为已启动
                                 'mode': asr_mode
                             }
 
@@ -150,6 +155,7 @@ class ASRWebSocketServer:
                         logger.info(f"[{client_id}] 收到停止命令")
                         if asr_instance:
                             asr_instance.end()
+                            asr_instance = None
 
                         # 输出音频统计信息
                         if audio_packet_count > 0:
@@ -169,41 +175,6 @@ class ASRWebSocketServer:
                     if first_audio_time is None:
                         first_audio_time = current_time
                     last_audio_time = current_time
-
-                    # 只在第一次收到音频数据时启动ASR
-                    if (asr_instance and
-                        client_id in self.clients and
-                            not self.clients[client_id].get('asr_started', False)):
-
-                        logger.info(
-                            f"[{client_id}] 收到第一个音频包，启动ASR - 大小: {audio_size} bytes")
-
-                        # 启动ASR
-                        asr_instance.start()
-
-                        # 等待ASR启动完成
-                        max_wait_time = 5.0  # 最多等待5秒
-                        wait_start = time.time()
-                        while not asr_instance.started and (time.time() - wait_start) < max_wait_time:
-                            await asyncio.sleep(0.01)
-
-                        if asr_instance.started:
-                            logger.info(f"[{client_id}] ASR实例已启动成功")
-                            # 标记已启动，避免重复启动
-                            self.clients[client_id]['asr_started'] = True
-
-                            # 发送启动成功消息
-                            await websocket.send(json.dumps({
-                                'status': 'started',
-                                'message': 'ASR started, processing audio'
-                            }))
-                        else:
-                            logger.error(f"[{client_id}] ASR启动超时")
-                            await websocket.send(json.dumps({
-                                'status': 'error',
-                                'message': 'ASR startup timeout'
-                            }))
-                            continue
 
                     # 发送音频数据
                     if (asr_instance and

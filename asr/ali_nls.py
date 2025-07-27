@@ -356,15 +356,28 @@ class ALiNls:
                 self.__is_close = True
                 return
 
+            # 重置连接状态
             self.finalResults = ""
             self.done = False
+            self.__endding = False
+            self.__is_close = False
+
+            # 清空帧队列
             with self.lock:
                 self.__frames.clear()
+
+            # 如果已有WebSocket连接，先关闭
+            if self.__ws:
+                try:
+                    self.__ws.close()
+                except:
+                    pass
+                self.__ws = None
 
             full_url = self.__URL + '?token=' + _token
             print(f"[ALiNls-{self.username}] 完整连接URL: {full_url}")
 
-            # 增加连接超时设置
+            # 创建新的WebSocket连接
             self.__ws = websocket.WebSocketApp(
                 full_url,
                 on_message=self.on_message,
@@ -419,6 +432,21 @@ class ALiNls:
             f"[ALiNls-{self.username}] 当前全局Token状态: {_token[:20] if _token else 'None'}...")
         print(
             f"[ALiNls-{self.username}] AppKey: {cfg.key_ali_nls_app_key[:10] if cfg.key_ali_nls_app_key else 'None'}...")
+
+        # 重置实例状态 - 关键修复
+        self.__task_id = ''  # 清空TaskID
+        self.started = False
+        self.done = False
+        self.finalResults = ""
+        self.__endding = False
+        self.__is_close = False
+        self.data = b''
+
+        # 清空音频帧队列
+        with self.lock:
+            self.__frames.clear()
+
+        print(f"[ALiNls-{self.username}] ✓ 实例状态已重置")
 
         # 启动连接线程
         Thread(target=self.__connect, args=[]).start()
