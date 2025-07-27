@@ -203,6 +203,18 @@ class ALiNls:
         print(f"[ALiNls-{self.username}] 关闭代码: {code}")
         print(f"[ALiNls-{self.username}] 关闭消息: {msg}")
 
+        # 诊断关闭原因
+        if code == 4001:
+            print(f"[ALiNls-{self.username}] ❌ Token无效或过期，请检查阿里云配置")
+        elif code == 4002:
+            print(f"[ALiNls-{self.username}] ❌ 请求参数错误")
+        elif code == 4003:
+            print(f"[ALiNls-{self.username}] ❌ 认证失败")
+        elif code == 1006:
+            print(f"[ALiNls-{self.username}] ❌ 连接异常断开，可能是网络问题")
+        elif code is None:
+            print(f"[ALiNls-{self.username}] ❌ 连接立即断开，可能是Token或网络问题")
+
     # 收到websocket错误的处理
     def on_error(self, ws, error):
         print(f"[ALiNls-{self.username}] ✗ WebSocket错误: {error}")
@@ -220,6 +232,7 @@ class ALiNls:
     # 收到websocket连接建立的处理
     def on_open(self, ws):
         self.__endding = False
+        self.__is_close = False  # 重置关闭标志
         print(f"[ALiNls-{self.username}] ✓ WebSocket连接已成功建立")
 
         # 连接建立后立即发送启动命令
@@ -340,6 +353,7 @@ class ALiNls:
 
             if not _token:
                 print(f"[ALiNls-{self.username}] 错误: Token为空，无法连接")
+                self.__is_close = True
                 return
 
             self.finalResults = ""
@@ -350,6 +364,7 @@ class ALiNls:
             full_url = self.__URL + '?token=' + _token
             print(f"[ALiNls-{self.username}] 完整连接URL: {full_url}")
 
+            # 增加连接超时设置
             self.__ws = websocket.WebSocketApp(
                 full_url,
                 on_message=self.on_message,
@@ -359,12 +374,20 @@ class ALiNls:
             )
 
             print(f"[ALiNls-{self.username}] WebSocketApp已创建，开始连接...")
-            self.__ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+
+            # 设置连接超时
+            self.__ws.run_forever(
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                ping_interval=30,
+                ping_timeout=10
+            )
+
             print(f"[ALiNls-{self.username}] WebSocket连接已结束")
 
         except Exception as e:
             print(f"[ALiNls-{self.username}] 连接过程中出错: {e}")
             print(f"[ALiNls-{self.username}] 错误类型: {type(e).__name__}")
+            self.__is_close = True
             import traceback
             traceback.print_exc()
 

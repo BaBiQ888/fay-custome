@@ -32,60 +32,110 @@ class ASRWebSocketServer:
                     if data.get('action') == 'start':
                         # 创建ASR实例
                         asr_mode = data.get('mode', cfg.ASR_mode)
-                        asr_instance = self._create_asr_instance(
-                            asr_mode, client_id)
 
-                        # 简化的结果回调函数
-                        def result_callback(text, is_final):
-                            try:
-                                logger.info(
-                                    f"[{client_id}] 收到ASR结果: text='{text}', is_final={is_final}")
+                        try:
+                            asr_instance = self._create_asr_instance(
+                                asr_mode, client_id)
 
-                                # 创建结果消息
-                                result_message = json.dumps({
-                                    'type': 'result',
-                                    'text': text,
-                                    'is_final': is_final,
-                                    'timestamp': time.time()
-                                })
+                            # 启动ASR实例
+                            asr_instance.start()
 
-                                # 使用线程安全的方式发送消息
-                                future = asyncio.run_coroutine_threadsafe(
-                                    websocket.send(result_message),
-                                    self.loop
-                                )
+                            # 等待连接建立，增加超时检查
+                            max_wait_time = 10.0  # 增加等待时间
+                            wait_start = time.time()
+                            connection_established = False
 
-                                # 等待发送完成，设置超时
-                                try:
-                                    future.result(timeout=1.0)
-                                    logger.info(f"[{client_id}] ASR结果已发送到客户端")
-                                except Exception as send_error:
-                                    logger.error(
-                                        f"[{client_id}] 发送ASR结果失败: {send_error}")
+                            while (time.time() - wait_start) < max_wait_time:
+                                if asr_instance.started:
+                                    # 对于阿里云ASR，额外检查连接状态
+                                    if hasattr(asr_instance, '_ALiNls__is_close'):
+                                        if not asr_instance._ALiNls__is_close:
+                                            connection_established = True
+                                            break
+                                        else:
+                                            logger.warning(
+                                                f"[{client_id}] 检测到ASR连接已断开，尝试重连")
+                                            # 重新创建实例
+                                            asr_instance.end()
+                                            asr_instance = self._create_asr_instance(
+                                                asr_mode, client_id)
+                                            asr_instance.start()
+                                            await asyncio.sleep(1)  # 等待重连
+                                            continue
+                                    else:
+                                        connection_established = True
+                                        break
+                                await asyncio.sleep(0.1)
 
-                            except Exception as callback_error:
+                            if not connection_established:
                                 logger.error(
-                                    f"[{client_id}] 回调函数执行出错: {callback_error}")
-                                import traceback
-                                traceback.print_exc()
+                                    f"[{client_id}] ASR连接建立失败，超时或连接断开")
+                                await websocket.send(json.dumps({
+                                    'status': 'error',
+                                    'message': 'ASR connection failed - timeout or disconnected'
+                                }))
+                                continue
 
-                        # 设置回调函数
-                        logger.info(f"[{client_id}] 设置ASR结果回调函数")
-                        asr_instance.set_result_callback(result_callback)
+                            # 设置回调函数
+                            def result_callback(text, is_final):
+                                try:
+                                    logger.info(
+                                        f"[{client_id}] 收到ASR结果: text='{text}', is_final={is_final}")
 
-                        self.clients[client_id] = {
-                            'websocket': websocket,
-                            'asr': asr_instance,
-                            'started': False,
-                            'asr_started': False
-                        }
+                                    # 创建结果消息
+                                    result_message = json.dumps({
+                                        'type': 'result',
+                                        'text': text,
+                                        'is_final': is_final,
+                                        'timestamp': time.time()
+                                    })
 
-                        logger.info(f"[{client_id}] ASR实例已创建，模式: {asr_mode}")
-                        await websocket.send(json.dumps({
-                            'status': 'ready',
-                            'mode': asr_mode,
-                            'message': 'ASR instance created, waiting for audio data'
-                        }))
+                                    # 使用线程安全的方式发送消息
+                                    future = asyncio.run_coroutine_threadsafe(
+                                        websocket.send(result_message),
+                                        self.loop
+                                    )
+
+                                    # 等待发送完成，设置超时
+                                    try:
+                                        future.result(timeout=1.0)
+                                        logger.info(
+                                            f"[{client_id}] ASR结果已发送到客户端")
+                                    except Exception as send_error:
+                                        logger.error(
+                                            f"[{client_id}] 发送ASR结果失败: {send_error}")
+
+                                except Exception as callback_error:
+                                    logger.error(
+                                        f"[{client_id}] 回调函数执行出错: {callback_error}")
+                                    import traceback
+                                    traceback.print_exc()
+
+                            asr_instance.set_result_callback(result_callback)
+
+                            self.clients[client_id] = {
+                                'websocket': websocket,
+                                'asr': asr_instance,
+                                'started': False,
+                                'asr_started': False,
+                                'mode': asr_mode
+                            }
+
+                            logger.info(
+                                f"[{client_id}] ASR实例创建成功，模式: {asr_mode}")
+                            await websocket.send(json.dumps({
+                                'status': 'ready',
+                                'mode': asr_mode,
+                                'message': 'ASR instance created and connected successfully'
+                            }))
+
+                        except Exception as e:
+                            logger.error(f"[{client_id}] 创建ASR实例失败: {e}")
+                            await websocket.send(json.dumps({
+                                'status': 'error',
+                                'message': f'Failed to create ASR instance: {str(e)}'
+                            }))
+                            continue
 
                     elif data.get('action') == 'stop':
                         logger.info(f"[{client_id}] 收到停止命令")
