@@ -879,43 +879,17 @@ def api_tts():
         # 调用TTS合成
         audio_file = synthesize_tts_only(content, voice_id, username)
 
-        if audio_file:
-            # 检查文件是否存在，如果不存在尝试修正路径
-            if not os.path.exists(audio_file):
-                # 如果是相对路径导致的问题，尝试从项目根目录查找
-                if audio_file.startswith('./samples/'):
-                    # 获取项目根目录
-                    project_root = os.path.dirname(
-                        os.path.dirname(os.path.abspath(__file__)))
-                    corrected_path = os.path.join(
-                        project_root, audio_file[2:])  # 去掉 './'
-                    if os.path.exists(corrected_path):
-                        audio_file = corrected_path
-                elif 'samples/' in audio_file:
-                    # 处理其他可能的路径问题
-                    filename = os.path.basename(audio_file)
-                    project_root = os.path.dirname(
-                        os.path.dirname(os.path.abspath(__file__)))
-                    corrected_path = os.path.join(
-                        project_root, 'samples', filename)
-                    if os.path.exists(corrected_path):
-                        audio_file = corrected_path
-
-            # 再次检查文件是否存在
-            if os.path.exists(audio_file):
-                # 返回音频文件
-                return send_file(
-                    audio_file,
-                    mimetype='audio/mpeg' if audio_file.endswith(
-                        '.mp3') else 'audio/wav',
-                    as_attachment=False,
-                    download_name=os.path.basename(audio_file)
-                )
-            else:
-                util.log(1, f"音频文件不存在: {audio_file}")
-                return jsonify({'error': f'音频文件不存在: {audio_file}'}), 404
+        if audio_file and os.path.exists(audio_file):
+            # 返回音频文件
+            return send_file(
+                audio_file,
+                mimetype='audio/mpeg' if audio_file.endswith(
+                    '.mp3') else 'audio/wav',
+                as_attachment=False,
+                download_name=os.path.basename(audio_file)
+            )
         else:
-            return jsonify({'error': '语音合成失败'}), 500
+            return jsonify({'error': '语音合成失败或文件不存在'}), 500
 
     except Exception as e:
         return jsonify({'error': f'TTS服务出错: {e}'}), 500
@@ -926,6 +900,12 @@ def synthesize_tts_only(text, voice_id=None, username='TTS_User'):
     独立的TTS合成函数，从fay_core中提取语音合成逻辑
     """
     try:
+        # 获取项目根目录并确保samples目录存在
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+        samples_dir = os.path.join(project_root, 'samples')
+        os.makedirs(samples_dir, exist_ok=True)
+
         # 获取Fay实例
         fay_instance = fay_booter.feiFei
         if not fay_instance:
@@ -949,9 +929,28 @@ def synthesize_tts_only(text, voice_id=None, username='TTS_User'):
         result = fay_instance.sp.to_sample(filtered_text, mood_voice)
 
         if result:
-            util.printInfo(
-                1, username, f"TTS合成完成. 耗时: {math.floor((time.time() - tm) * 1000)} ms 文件:{result}")
-            return result
+            # 统一处理路径格式，确保使用绝对路径
+            if result.startswith('./samples/'):
+                # 处理 ./samples/ 格式
+                result = os.path.join(project_root, result[2:])
+            elif result.startswith('./'):
+                # 处理其他 ./ 开头的路径
+                result = os.path.join(project_root, result[2:])
+            elif not os.path.isabs(result):
+                # 如果不是绝对路径，假设文件在samples目录中
+                filename = os.path.basename(result)
+                result = os.path.join(samples_dir, filename)
+
+            # 验证文件是否存在
+            if os.path.exists(result):
+                util.printInfo(
+                    1, username, f"TTS合成完成. 耗时: {math.floor((time.time() - tm) * 1000)} ms 文件:{result}")
+                return result
+            else:
+                util.log(1, f"TTS合成的文件不存在: {result}")
+                util.log(1, f"项目根目录: {project_root}")
+                util.log(1, f"samples目录: {samples_dir}")
+                return None
         else:
             util.log(1, "TTS合成返回空结果")
             return None
