@@ -219,6 +219,26 @@ class ALiNls:
         print(f"[ALiNls-{self.username}] 连接状态: 已连接")
         print(f"[ALiNls-{self.username}] 当前队列中帧数: {len(self.__frames)}")
 
+        # 连接建立后立即发送启动命令
+        data = {
+            'header': self.__create_header('StartTranscription'),
+            "payload": {
+                "format": "pcm",
+                "sample_rate": 16000,
+                "enable_intermediate_result": True,
+                "enable_punctuation_prediction": False,
+                "enable_inverse_text_normalization": True,
+                "speech_noise_threshold": -1
+            }
+        }
+
+        print(f"[ALiNls-{self.username}] 连接建立后发送启动转录命令")
+        print(f"[ALiNls-{self.username}] 启动命令详情: {json.dumps(data, indent=2)}")
+
+        with self.lock:
+            self.__frames.append(data)
+        print(f"[ALiNls-{self.username}] 启动转录命令已加入发送队列")
+
         def run(*args):
             sent_packets = 0
             sent_bytes = 0
@@ -354,24 +374,8 @@ class ALiNls:
         # 启动连接线程
         Thread(target=self.__connect, args=[]).start()
 
-        # 准备启动转录的数据
-        data = {
-            'header': self.__create_header('StartTranscription'),
-            "payload": {
-                "format": "pcm",
-                "sample_rate": 16000,
-                "enable_intermediate_result": True,
-                "enable_punctuation_prediction": False,
-                "enable_inverse_text_normalization": True,
-                "speech_noise_threshold": -1
-            }
-        }
-
-        print(f"[ALiNls-{self.username}] 准备发送启动转录命令")
-        print(f"[ALiNls-{self.username}] 启动命令详情: {json.dumps(data, indent=2)}")
-
-        self.send(data)
-        print(f"[ALiNls-{self.username}] 启动转录命令已加入发送队列")
+        # 等待连接建立后再发送启动命令
+        print(f"[ALiNls-{self.username}] 等待WebSocket连接建立...")
 
     def end(self):
         print(f"[ALiNls-{self.username}] 结束ASR会话...")
