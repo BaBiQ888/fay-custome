@@ -35,16 +35,43 @@ class ASRWebSocketServer:
                         asr_instance = self._create_asr_instance(
                             asr_mode, client_id)
 
-                        # 设置结果回调
-                        asr_instance.set_result_callback(
-                            lambda text, is_final: asyncio.run_coroutine_threadsafe(
-                                websocket.send(json.dumps({
+                        # 简化的结果回调函数
+                        def result_callback(text, is_final):
+                            try:
+                                logger.info(
+                                    f"[{client_id}] 收到ASR结果: text='{text}', is_final={is_final}")
+
+                                # 创建结果消息
+                                result_message = json.dumps({
                                     'type': 'result',
                                     'text': text,
-                                    'is_final': is_final
-                                })), self.loop
-                            )
-                        )
+                                    'is_final': is_final,
+                                    'timestamp': time.time()
+                                })
+
+                                # 使用线程安全的方式发送消息
+                                future = asyncio.run_coroutine_threadsafe(
+                                    websocket.send(result_message),
+                                    self.loop
+                                )
+
+                                # 等待发送完成，设置超时
+                                try:
+                                    future.result(timeout=1.0)
+                                    logger.info(f"[{client_id}] ASR结果已发送到客户端")
+                                except Exception as send_error:
+                                    logger.error(
+                                        f"[{client_id}] 发送ASR结果失败: {send_error}")
+
+                            except Exception as callback_error:
+                                logger.error(
+                                    f"[{client_id}] 回调函数执行出错: {callback_error}")
+                                import traceback
+                                traceback.print_exc()
+
+                        # 设置回调函数
+                        logger.info(f"[{client_id}] 设置ASR结果回调函数")
+                        asr_instance.set_result_callback(result_callback)
 
                         self.clients[client_id] = {
                             'websocket': websocket,
@@ -94,18 +121,30 @@ class ASRWebSocketServer:
 
                         # 启动ASR
                         asr_instance.start()
-                        while not asr_instance.started:
+
+                        # 等待ASR启动完成
+                        max_wait_time = 5.0  # 最多等待5秒
+                        wait_start = time.time()
+                        while not asr_instance.started and (time.time() - wait_start) < max_wait_time:
                             await asyncio.sleep(0.01)
 
-                        # 标记已启动，避免重复启动
-                        self.clients[client_id]['asr_started'] = True
-                        logger.info(f"[{client_id}] ASR实例已启动")
+                        if asr_instance.started:
+                            logger.info(f"[{client_id}] ASR实例已启动成功")
+                            # 标记已启动，避免重复启动
+                            self.clients[client_id]['asr_started'] = True
 
-                        # 只发送一次started消息
-                        await websocket.send(json.dumps({
-                            'status': 'started',
-                            'message': 'ASR started, processing audio'
-                        }))
+                            # 发送启动成功消息
+                            await websocket.send(json.dumps({
+                                'status': 'started',
+                                'message': 'ASR started, processing audio'
+                            }))
+                        else:
+                            logger.error(f"[{client_id}] ASR启动超时")
+                            await websocket.send(json.dumps({
+                                'status': 'error',
+                                'message': 'ASR startup timeout'
+                            }))
+                            continue
 
                     # 发送音频数据
                     if (asr_instance and
@@ -114,11 +153,8 @@ class ASRWebSocketServer:
 
                         asr_instance.send(message)
 
-                        # 定期输出音频接收统计（每100个包或每5秒）
-                        if (audio_packet_count % 100 == 0 or
-                            (audio_packet_count > 1 and current_time - first_audio_time >= 5 and
-                             audio_packet_count % 50 == 0)):
-
+                        # 定期输出音频接收统计
+                        if audio_packet_count % 50 == 0:
                             duration = current_time - first_audio_time
                             avg_packet_size = total_audio_bytes / audio_packet_count
                             data_rate = total_audio_bytes / duration if duration > 0 else 0
