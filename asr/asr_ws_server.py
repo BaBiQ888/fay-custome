@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 import logging
+import time
 from threading import Thread
 from asr.ali_nls import ALiNls
 from asr.funasr import FunASR
@@ -19,6 +20,10 @@ class ASRWebSocketServer:
     async def handle_client(self, websocket, path):
         client_id = f"asr_client_{id(websocket)}"
         asr_instance = None
+        audio_packet_count = 0
+        total_audio_bytes = 0
+        first_audio_time = None
+        last_audio_time = None
 
         try:
             async for message in websocket:
@@ -45,25 +50,47 @@ class ASRWebSocketServer:
                             'websocket': websocket,
                             'asr': asr_instance,
                             'started': False,
-                            'asr_started': False  # 新增：标记ASR是否已启动
+                            'asr_started': False
                         }
 
+                        logger.info(f"[{client_id}] ASR实例已创建，模式: {asr_mode}")
                         await websocket.send(json.dumps({
                             'status': 'ready',
                             'mode': asr_mode,
                             'message': 'ASR instance created, waiting for audio data'
                         }))
 
-                elif data.get('action') == 'stop':
-                    if asr_instance:
-                        asr_instance.end()
-                    break
+                    elif data.get('action') == 'stop':
+                        logger.info(f"[{client_id}] 收到停止命令")
+                        if asr_instance:
+                            asr_instance.end()
+
+                        # 输出音频统计信息
+                        if audio_packet_count > 0:
+                            duration = last_audio_time - \
+                                first_audio_time if first_audio_time and last_audio_time else 0
+                            logger.info(f"[{client_id}] 音频统计 - 包数: {audio_packet_count}, "
+                                        f"总字节: {total_audio_bytes}, 持续时间: {duration:.2f}秒")
+                        break
 
                 elif isinstance(message, bytes):
+                    current_time = time.time()
+                    audio_packet_count += 1
+                    audio_size = len(message)
+                    total_audio_bytes += audio_size
+
+                    # 记录第一个和最后一个音频包的时间
+                    if first_audio_time is None:
+                        first_audio_time = current_time
+                    last_audio_time = current_time
+
                     # 只在第一次收到音频数据时启动ASR
                     if (asr_instance and
                         client_id in self.clients and
                             not self.clients[client_id].get('asr_started', False)):
+
+                        logger.info(
+                            f"[{client_id}] 收到第一个音频包，启动ASR - 大小: {audio_size} bytes")
 
                         # 启动ASR
                         asr_instance.start()
@@ -72,7 +99,7 @@ class ASRWebSocketServer:
 
                         # 标记已启动，避免重复启动
                         self.clients[client_id]['asr_started'] = True
-                        print(f"ASR实例已启动: {client_id}")
+                        logger.info(f"[{client_id}] ASR实例已启动")
 
                         # 只发送一次started消息
                         await websocket.send(json.dumps({
@@ -84,25 +111,55 @@ class ASRWebSocketServer:
                     if (asr_instance and
                         client_id in self.clients and
                             self.clients[client_id].get('asr_started', False)):
+
                         asr_instance.send(message)
 
+                        # 定期输出音频接收统计（每100个包或每5秒）
+                        if (audio_packet_count % 100 == 0 or
+                            (audio_packet_count > 1 and current_time - first_audio_time >= 5 and
+                             audio_packet_count % 50 == 0)):
+
+                            duration = current_time - first_audio_time
+                            avg_packet_size = total_audio_bytes / audio_packet_count
+                            data_rate = total_audio_bytes / duration if duration > 0 else 0
+
+                            logger.info(f"[{client_id}] 音频接收中 - 包#{audio_packet_count}, "
+                                        f"当前包: {audio_size}B, 平均包大小: {avg_packet_size:.1f}B, "
+                                        f"数据速率: {data_rate:.1f}B/s, 持续: {duration:.1f}s")
+                    else:
+                        logger.warning(
+                            f"[{client_id}] 收到音频数据但ASR未启动 - 包#{audio_packet_count}, 大小: {audio_size} bytes")
+
         except websockets.exceptions.ConnectionClosed:
-            logger.info(f"Client {client_id} disconnected")
+            logger.info(f"[{client_id}] 客户端断开连接")
         except Exception as e:
-            logger.error(f"Error handling client {client_id}: {e}")
-            await websocket.send(json.dumps({
-                'status': 'error',
-                'message': str(e)
-            }))
+            logger.error(f"[{client_id}] 处理客户端时出错: {e}")
+            try:
+                await websocket.send(json.dumps({
+                    'status': 'error',
+                    'message': str(e)
+                }))
+            except:
+                pass
         finally:
+            # 输出最终统计
+            if audio_packet_count > 0:
+                duration = last_audio_time - \
+                    first_audio_time if first_audio_time and last_audio_time else 0
+                avg_packet_size = total_audio_bytes / audio_packet_count
+                logger.info(f"[{client_id}] 会话结束统计 - 总包数: {audio_packet_count}, "
+                            f"总字节: {total_audio_bytes}, 平均包大小: {avg_packet_size:.1f}B, "
+                            f"总持续时间: {duration:.2f}s")
+
             # 清理资源
             if client_id in self.clients:
                 if asr_instance:
                     asr_instance.end()
                 del self.clients[client_id]
+                logger.info(f"[{client_id}] 客户端资源已清理")
 
     def _create_asr_instance(self, mode, username):
-        print("create asr instance", mode, username)
+        logger.info(f"创建ASR实例 - 模式: {mode}, 用户: {username}")
         """创建ASR实例"""
         if mode == "ali":
             return ALiNls(username)
@@ -116,6 +173,7 @@ class ASRWebSocketServer:
         def run_server():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            self.loop = loop  # 保存loop引用供回调使用
 
             start_server = websockets.serve(
                 self.handle_client,
@@ -126,7 +184,7 @@ class ASRWebSocketServer:
             )
 
             logger.info(
-                f"ASR WebSocket server starting on {self.host}:{self.port}")
+                f"ASR WebSocket服务器启动 - {self.host}:{self.port}")
             loop.run_until_complete(start_server)
             loop.run_forever()
 
