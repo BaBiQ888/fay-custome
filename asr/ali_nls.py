@@ -221,8 +221,6 @@ class ALiNls:
     def on_open(self, ws):
         self.__endding = False
         print(f"[ALiNls-{self.username}] ✓ WebSocket连接已成功建立")
-        print(f"[ALiNls-{self.username}] 连接状态: 已连接")
-        print(f"[ALiNls-{self.username}] 当前队列中帧数: {len(self.__frames)}")
 
         # 连接建立后立即发送启动命令
         data = {
@@ -237,9 +235,6 @@ class ALiNls:
             }
         }
 
-        print(f"[ALiNls-{self.username}] 连接建立后发送启动转录命令")
-        print(f"[ALiNls-{self.username}] 启动命令详情: {json.dumps(data, indent=2)}")
-
         with self.lock:
             self.__frames.append(data)
         print(f"[ALiNls-{self.username}] 启动转录命令已加入发送队列")
@@ -248,7 +243,7 @@ class ALiNls:
             sent_packets = 0
             sent_bytes = 0
             start_command_sent = False
-            self.__last_send_time = time.time()  # 初始化发送时间
+            self.__last_send_time = time.time()
 
             print(f"[ALiNls-{self.username}] 发送线程已启动")
 
@@ -283,18 +278,36 @@ class ALiNls:
                             self.__last_send_time = current_time
 
                         elif isinstance(frame, bytes):
-                            ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                            self.data += frame
-                            sent_packets += 1
-                            sent_bytes += len(frame)
-                            self.__last_send_time = current_time  # 更新发送时间
+                            # 将大的音频包分割成更小的块
+                            chunk_size = 3200  # 100ms的音频数据 (16000*2/10)
+                            for i in range(0, len(frame), chunk_size):
+                                chunk = frame[i:i+chunk_size]
+                                ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
+                                self.data += chunk
+                                sent_packets += 1
+                                sent_bytes += len(chunk)
+                                self.__last_send_time = current_time
+
+                                # 控制发送速度，模拟实时音频流
+                                time.sleep(0.1)  # 100ms间隔
+
+                            # 分析音频数据
+                            import struct
+                            if len(frame) >= 2:
+                                samples = struct.unpack(
+                                    '<' + 'h' * min(4, len(frame)//2), frame[:8])
+                                max_sample = max(abs(s)
+                                                 for s in samples) if samples else 0
+
+                                print(
+                                    f"[ALiNls-{self.username}] → 发送音频块: {len(frame)}字节 -> {len(frame)//chunk_size + 1}个小块, 最大采样值: {max_sample}")
 
                             # 定期输出统计
-                            if sent_packets % 50 == 0:
+                            if sent_packets % 20 == 0:
                                 print(
-                                    f"[ALiNls-{self.username}] → 已发送音频包: {sent_packets}, 字节: {sent_bytes}")
+                                    f"[ALiNls-{self.username}] → 已发送音频包: {sent_packets}, 字节: {sent_bytes}, 队列剩余: {len(self.__frames)}")
                     else:
-                        time.sleep(0.01)  # 短暂休眠
+                        time.sleep(0.01)
 
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送数据时出错: {e}")
