@@ -25,11 +25,12 @@ class ASRWebSocketServer:
                 if isinstance(message, str):
                     data = json.loads(message)
                     if data.get('action') == 'start':
-                        # 创建ASR实例但不立即启动
+                        # 创建ASR实例
                         asr_mode = data.get('mode', cfg.ASR_mode)
                         asr_instance = self._create_asr_instance(
                             asr_mode, client_id)
 
+                        # 设置结果回调
                         asr_instance.set_result_callback(
                             lambda text, is_final: asyncio.run_coroutine_threadsafe(
                                 websocket.send(json.dumps({
@@ -43,45 +44,47 @@ class ASRWebSocketServer:
                         self.clients[client_id] = {
                             'websocket': websocket,
                             'asr': asr_instance,
-                            'started': False  # 标记未启动
+                            'started': False,
+                            'asr_started': False  # 新增：标记ASR是否已启动
                         }
 
                         await websocket.send(json.dumps({
-                            'status': 'ready',  # 改为ready状态
+                            'status': 'ready',
                             'mode': asr_mode,
                             'message': 'ASR instance created, waiting for audio data'
                         }))
 
+                elif data.get('action') == 'stop':
+                    if asr_instance:
+                        asr_instance.end()
+                    break
+
                 elif isinstance(message, bytes):
-                    # 收到第一个音频数据时才启动ASR
-                    if asr_instance and not self.clients[client_id].get('started', False):
+                    # 只在第一次收到音频数据时启动ASR
+                    if (asr_instance and
+                        client_id in self.clients and
+                            not self.clients[client_id].get('asr_started', False)):
+
+                        # 启动ASR
                         asr_instance.start()
                         while not asr_instance.started:
                             await asyncio.sleep(0.01)
 
-                    self.clients[client_id]['started'] = True
-                    print(f"ASR实例已启动: {client_id}")
+                        # 标记已启动，避免重复启动
+                        self.clients[client_id]['asr_started'] = True
+                        print(f"ASR实例已启动: {client_id}")
 
-                    # 通知客户端ASR已启动
-                    await websocket.send(json.dumps({
-                        'status': 'started',
-                        'message': 'ASR started, processing audio'
-                    }))
-
-                # 发送音频数据
-                if asr_instance and self.clients[client_id].get('started', False):
-                    asr_instance.send(message)
-
-                    # 检查是否有新的识别结果
-                    if hasattr(asr_instance, 'finalResults') and asr_instance.finalResults:
+                        # 只发送一次started消息
                         await websocket.send(json.dumps({
-                            'type': 'result',
-                            'text': asr_instance.finalResults,
-                            'is_final': asr_instance.done
+                            'status': 'started',
+                            'message': 'ASR started, processing audio'
                         }))
 
-                        if asr_instance.done:
-                            asr_instance.done = False
+                    # 发送音频数据
+                    if (asr_instance and
+                        client_id in self.clients and
+                            self.clients[client_id].get('asr_started', False)):
+                        asr_instance.send(message)
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client {client_id} disconnected")
