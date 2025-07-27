@@ -879,15 +879,41 @@ def api_tts():
         # 调用TTS合成
         audio_file = synthesize_tts_only(content, voice_id, username)
 
-        if audio_file and os.path.exists(audio_file):
-            # 返回音频文件
-            return send_file(
-                audio_file,
-                mimetype='audio/mpeg' if audio_file.endswith(
-                    '.mp3') else 'audio/wav',
-                as_attachment=False,
-                download_name=os.path.basename(audio_file)
-            )
+        if audio_file:
+            # 检查文件是否存在，如果不存在尝试修正路径
+            if not os.path.exists(audio_file):
+                # 如果是相对路径导致的问题，尝试从项目根目录查找
+                if audio_file.startswith('./samples/'):
+                    # 获取项目根目录
+                    project_root = os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__)))
+                    corrected_path = os.path.join(
+                        project_root, audio_file[2:])  # 去掉 './'
+                    if os.path.exists(corrected_path):
+                        audio_file = corrected_path
+                elif 'samples/' in audio_file:
+                    # 处理其他可能的路径问题
+                    filename = os.path.basename(audio_file)
+                    project_root = os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__)))
+                    corrected_path = os.path.join(
+                        project_root, 'samples', filename)
+                    if os.path.exists(corrected_path):
+                        audio_file = corrected_path
+
+            # 再次检查文件是否存在
+            if os.path.exists(audio_file):
+                # 返回音频文件
+                return send_file(
+                    audio_file,
+                    mimetype='audio/mpeg' if audio_file.endswith(
+                        '.mp3') else 'audio/wav',
+                    as_attachment=False,
+                    download_name=os.path.basename(audio_file)
+                )
+            else:
+                util.log(1, f"音频文件不存在: {audio_file}")
+                return jsonify({'error': f'音频文件不存在: {audio_file}'}), 404
         else:
             return jsonify({'error': '语音合成失败'}), 500
 
