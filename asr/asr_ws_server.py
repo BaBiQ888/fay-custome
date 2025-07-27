@@ -19,6 +19,12 @@ class ASRWebSocketServer:
 
     async def handle_client(self, websocket, path):
         client_id = f"asr_client_{id(websocket)}"
+        client_ip = websocket.remote_address[0] if websocket.remote_address else "unknown"
+
+        # 添加连接日志
+        logger.info(f"[{client_id}] 新客户端连接 - IP: {client_ip}, Path: {path}")
+        print(f"[ASR-Server] ✓ 新客户端连接 - {client_id} from {client_ip}")
+
         asr_instance = None
         audio_packet_count = 0
         total_audio_bytes = 0
@@ -29,6 +35,9 @@ class ASRWebSocketServer:
             async for message in websocket:
                 if isinstance(message, str):
                     data = json.loads(message)
+                    logger.info(f"[{client_id}] 收到控制消息: {data}")
+                    print(f"[ASR-Server] ← 收到控制消息: {data}")
+
                     if data.get('action') == 'start':
                         # 创建ASR实例
                         asr_mode = data.get('mode', cfg.ASR_mode)
