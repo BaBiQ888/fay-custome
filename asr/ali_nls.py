@@ -22,27 +22,45 @@ _token = ''
 
 def __post_token():
     global _token
-    __client = AcsClient(
-        cfg.key_ali_nls_key_id,
-        cfg.key_ali_nls_key_secret,
-        "cn-shanghai"
-    )
+    try:
+        print(f"[Token] 开始获取阿里云NLS Token...")
+        print(
+            f"[Token] 使用配置 - KeyID: {cfg.key_ali_nls_key_id[:8]}..., KeySecret: {cfg.key_ali_nls_key_secret[:8]}...")
 
-    __request = CommonRequest()
-    __request.set_method('POST')
-    __request.set_domain('nls-meta.cn-shanghai.aliyuncs.com')
-    __request.set_version('2019-02-28')
-    __request.set_action_name('CreateToken')
-    info = json.loads(__client.do_action_with_exception(__request))
-    _token = info['Token']['Id']
-    authorize = Authorize_Tb()
-    authorize_info = authorize.find_by_userid(cfg.key_ali_nls_key_id)
-    if authorize_info is not None:
-        authorize.update_by_userid(
-            cfg.key_ali_nls_key_id, _token, info['Token']['ExpireTime']*1000)
-    else:
-        authorize.add(cfg.key_ali_nls_key_id, _token,
-                      info['Token']['ExpireTime']*1000)
+        __client = AcsClient(
+            cfg.key_ali_nls_key_id,
+            cfg.key_ali_nls_key_secret,
+            "cn-shanghai"
+        )
+
+        __request = CommonRequest()
+        __request.set_method('POST')
+        __request.set_domain('nls-meta.cn-shanghai.aliyuncs.com')
+        __request.set_version('2019-02-28')
+        __request.set_action_name('CreateToken')
+
+        print(f"[Token] 发送Token请求到阿里云...")
+        info = json.loads(__client.do_action_with_exception(__request))
+        _token = info['Token']['Id']
+
+        print(f"[Token] Token获取成功: {_token[:20]}...")
+        print(f"[Token] Token过期时间: {info['Token']['ExpireTime']}")
+
+        authorize = Authorize_Tb()
+        authorize_info = authorize.find_by_userid(cfg.key_ali_nls_key_id)
+        if authorize_info is not None:
+            authorize.update_by_userid(
+                cfg.key_ali_nls_key_id, _token, info['Token']['ExpireTime']*1000)
+        else:
+            authorize.add(cfg.key_ali_nls_key_id, _token,
+                          info['Token']['ExpireTime']*1000)
+        print(f"[Token] Token已保存到数据库")
+
+    except Exception as e:
+        print(f"[Token] Token获取失败: {e}")
+        print(f"[Token] 错误类型: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
 
 
 def __runnable():
@@ -81,6 +99,8 @@ class ALiNls:
     def __create_header(self, name):
         if name == 'StartTranscription':
             self.__task_id = util.random_hex(32)
+            print(f"[ALiNls-{self.username}] 生成新的TaskID: {self.__task_id}")
+
         header = {
             "appkey": cfg.key_ali_nls_app_key,
             "message_id": util.random_hex(32),
@@ -88,27 +108,35 @@ class ALiNls:
             "namespace": "SpeechTranscriber",
             "name": name
         }
+
+        print(f"[ALiNls-{self.username}] 创建消息头: {header}")
         return header
 
     # 收到websocket消息的处理
     def on_message(self, ws, message):
         try:
-            print(f"[ALiNls-{self.username}] 收到阿里云消息: {message}")
+            print(f"[ALiNls-{self.username}] ← 收到阿里云消息 (长度: {len(message)})")
+            print(f"[ALiNls-{self.username}] 消息内容: {message}")
+
             data = json.loads(message)
-            header = data['header']
-            name = header['name']
+            header = data.get('header', {})
+            name = header.get('name', 'Unknown')
+
+            print(f"[ALiNls-{self.username}] 消息类型: {name}")
+            print(f"[ALiNls-{self.username}] 消息头: {header}")
 
             if name == 'TranscriptionStarted':
                 self.started = True
-                print(f"[ALiNls-{self.username}] 转录已启动")
+                print(f"[ALiNls-{self.username}] ✓ 转录已启动")
 
             elif name == 'SentenceEnd':
                 self.done = True
-                self.finalResults = data['payload']['result']
-                print(f"[ALiNls-{self.username}] 最终结果: {self.finalResults}")
+                self.finalResults = data.get('payload', {}).get('result', '')
+                print(f"[ALiNls-{self.username}] ✓ 最终结果: {self.finalResults}")
 
                 # 调用回调函数通知ASR服务器
                 if self.result_callback:
+                    print(f"[ALiNls-{self.username}] 调用结果回调函数 (final=True)")
                     self.result_callback(self.finalResults, True)
 
                 # 保持原有的wsa_server通知逻辑
@@ -119,14 +147,17 @@ class ALiNls:
                     content = {'Topic': 'human', 'Data': {
                         'Key': 'log', 'Value': self.finalResults}, 'Username': self.username}
                     wsa_server.get_instance().add_cmd(content)
+
+                print(f"[ALiNls-{self.username}] 准备关闭WebSocket连接")
                 ws.close()
 
             elif name == 'TranscriptionResultChanged':
-                self.finalResults = data['payload']['result']
-                print(f"[ALiNls-{self.username}] 中间结果: {self.finalResults}")
+                self.finalResults = data.get('payload', {}).get('result', '')
+                print(f"[ALiNls-{self.username}] ◐ 中间结果: {self.finalResults}")
 
                 # 调用回调函数通知中间结果
                 if self.result_callback:
+                    print(f"[ALiNls-{self.username}] 调用结果回调函数 (final=False)")
                     self.result_callback(self.finalResults, False)
 
                 # 保持原有的wsa_server通知逻辑
@@ -140,32 +171,60 @@ class ALiNls:
 
             elif name == 'TaskFailed':
                 error_msg = header.get('status_text', 'Unknown error')
-                print(f"[ALiNls-{self.username}] 任务失败: {error_msg}")
+                status_code = header.get('status', 'Unknown')
+                print(f"[ALiNls-{self.username}] ✗ 任务失败")
+                print(f"[ALiNls-{self.username}] 错误代码: {status_code}")
+                print(f"[ALiNls-{self.username}] 错误信息: {error_msg}")
+                print(f"[ALiNls-{self.username}] 完整错误数据: {data}")
 
+            else:
+                print(f"[ALiNls-{self.username}] ⚠ 未知消息类型: {name}")
+                print(f"[ALiNls-{self.username}] 完整消息: {data}")
+
+        except json.JSONDecodeError as e:
+            print(f"[ALiNls-{self.username}] JSON解析错误: {e}")
+            print(f"[ALiNls-{self.username}] 原始消息: {message}")
         except Exception as e:
             print(f"[ALiNls-{self.username}] 处理消息时出错: {e}")
+            print(f"[ALiNls-{self.username}] 错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
 
     # 收到websocket的关闭要求
     def on_close(self, ws, code, msg):
         self.__endding = True
         self.__is_close = True
-        print(
-            f"[ALiNls-{self.username}] WebSocket连接已关闭 - 代码: {code}, 消息: {msg}")
+        print(f"[ALiNls-{self.username}] ✗ WebSocket连接已关闭")
+        print(f"[ALiNls-{self.username}] 关闭代码: {code}")
+        print(f"[ALiNls-{self.username}] 关闭消息: {msg}")
 
     # 收到websocket错误的处理
     def on_error(self, ws, error):
-        print(f"[ALiNls-{self.username}] WebSocket错误: {error}")
+        print(f"[ALiNls-{self.username}] ✗ WebSocket错误: {error}")
+        print(f"[ALiNls-{self.username}] 错误类型: {type(error).__name__}")
+
+        # 详细错误信息
+        if hasattr(error, 'args'):
+            print(f"[ALiNls-{self.username}] 错误参数: {error.args}")
+
+        import traceback
+        traceback.print_exc()
+
         self.started = True  # 避免在aliyun asr出错时，recorder一直等待start状态返回
 
     # 收到websocket连接建立的处理
     def on_open(self, ws):
         self.__endding = False
-        print(f"[ALiNls-{self.username}] WebSocket连接已建立")
+        print(f"[ALiNls-{self.username}] ✓ WebSocket连接已成功建立")
+        print(f"[ALiNls-{self.username}] 连接状态: 已连接")
+        print(f"[ALiNls-{self.username}] 当前队列中帧数: {len(self.__frames)}")
 
         def run(*args):
             sent_packets = 0
             sent_bytes = 0
             last_log_time = time.time()
+
+            print(f"[ALiNls-{self.username}] 发送线程已启动")
 
             while self.__endding == False:
                 try:
@@ -176,25 +235,35 @@ class ALiNls:
                             frame = self.__frames.pop(0)
 
                         if isinstance(frame, dict):
-                            ws.send(json.dumps(frame))
+                            message_json = json.dumps(frame)
+                            ws.send(message_json)
+                            frame_name = frame.get(
+                                'header', {}).get('name', 'Unknown')
                             print(
-                                f"[ALiNls-{self.username}] 发送控制消息: {frame.get('header', {}).get('name', 'Unknown')}")
+                                f"[ALiNls-{self.username}] → 发送控制消息: {frame_name}")
+                            print(
+                                f"[ALiNls-{self.username}] 控制消息内容: {message_json}")
+
                         elif isinstance(frame, bytes):
                             ws.send(frame, websocket.ABNF.OPCODE_BINARY)
                             self.data += frame
                             sent_packets += 1
                             sent_bytes += len(frame)
 
-                            # 每5秒或每100个包输出一次统计
-                            if (sent_packets % 100 == 0 or
+                            # 每5秒或每50个包输出一次统计
+                            if (sent_packets % 50 == 0 or
                                     current_time - last_log_time >= 5):
-                                print(f"[ALiNls-{self.username}] 已发送音频 - 包数: {sent_packets}, "
+                                print(f"[ALiNls-{self.username}] → 已发送音频 - 包数: {sent_packets}, "
                                       f"字节数: {sent_bytes}, 队列剩余: {len(self.__frames)}")
                                 last_log_time = current_time
                     else:
                         time.sleep(0.001)  # 避免忙等
+
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送数据时出错: {e}")
+                    print(f"[ALiNls-{self.username}] 错误类型: {type(e).__name__}")
+                    import traceback
+                    traceback.print_exc()
                     break
 
             print(
@@ -206,26 +275,62 @@ class ALiNls:
                 if remaining_frames > 0:
                     print(
                         f"[ALiNls-{self.username}] 发送剩余 {remaining_frames} 个音频帧")
-                    for frame in self.__frames:
-                        ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+                    try:
+                        for frame in self.__frames:
+                            ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+                            print(
+                                f"[ALiNls-{self.username}] → 发送剩余音频帧: {len(frame)} bytes")
+                    except Exception as e:
+                        print(f"[ALiNls-{self.username}] 发送剩余帧时出错: {e}")
 
-                frame = {"header": self.__create_header('StopTranscription')}
-                ws.send(json.dumps(frame))
-                print(f"[ALiNls-{self.username}] 发送停止转录命令")
+                try:
+                    frame = {"header": self.__create_header(
+                        'StopTranscription')}
+                    stop_message = json.dumps(frame)
+                    ws.send(stop_message)
+                    print(f"[ALiNls-{self.username}] → 发送停止转录命令")
+                    print(f"[ALiNls-{self.username}] 停止命令内容: {stop_message}")
+                except Exception as e:
+                    print(f"[ALiNls-{self.username}] 发送停止命令时出错: {e}")
 
         thread.start_new_thread(run, ())
 
     def __connect(self):
-        self.finalResults = ""
-        self.done = False
-        with self.lock:
-            self.__frames.clear()
-        self.__ws = websocket.WebSocketApp(
-            self.__URL + '?token=' + _token, on_message=self.on_message)
-        self.__ws.on_open = self.on_open
-        self.__ws.on_error = self.on_error
-        self.__ws.on_close = self.on_close
-        self.__ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+        try:
+            print(f"[ALiNls-{self.username}] 开始连接阿里云NLS...")
+            print(
+                f"[ALiNls-{self.username}] 当前Token: {_token[:20] if _token else 'None'}...")
+            print(f"[ALiNls-{self.username}] 连接URL: {self.__URL}")
+
+            if not _token:
+                print(f"[ALiNls-{self.username}] 错误: Token为空，无法连接")
+                return
+
+            self.finalResults = ""
+            self.done = False
+            with self.lock:
+                self.__frames.clear()
+
+            full_url = self.__URL + '?token=' + _token
+            print(f"[ALiNls-{self.username}] 完整连接URL: {full_url}")
+
+            self.__ws = websocket.WebSocketApp(
+                full_url,
+                on_message=self.on_message,
+                on_open=self.on_open,
+                on_error=self.on_error,
+                on_close=self.on_close
+            )
+
+            print(f"[ALiNls-{self.username}] WebSocketApp已创建，开始连接...")
+            self.__ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+            print(f"[ALiNls-{self.username}] WebSocket连接已结束")
+
+        except Exception as e:
+            print(f"[ALiNls-{self.username}] 连接过程中出错: {e}")
+            print(f"[ALiNls-{self.username}] 错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
 
     def send(self, buf):
         """发送音频数据到阿里云"""
@@ -234,11 +339,22 @@ class ALiNls:
             # 添加音频数据接收日志
             if isinstance(buf, bytes):
                 print(
-                    f"[ALiNls-{self.username}] 接收音频数据: {len(buf)} bytes, 队列长度: {len(self.__frames)}")
+                    f"[ALiNls-{self.username}] ← 接收音频数据: {len(buf)} bytes, 队列长度: {len(self.__frames)}")
+            elif isinstance(buf, dict):
+                frame_name = buf.get('header', {}).get('name', 'Unknown')
+                print(f"[ALiNls-{self.username}] ← 接收控制消息: {frame_name}")
 
     def start(self):
-        print(f"[ALiNls-{self.username}] 启动ASR连接")
+        print(f"[ALiNls-{self.username}] 启动ASR连接...")
+        print(
+            f"[ALiNls-{self.username}] 当前全局Token状态: {_token[:20] if _token else 'None'}...")
+        print(
+            f"[ALiNls-{self.username}] AppKey: {cfg.key_ali_nls_app_key[:10] if cfg.key_ali_nls_app_key else 'None'}...")
+
+        # 启动连接线程
         Thread(target=self.__connect, args=[]).start()
+
+        # 准备启动转录的数据
         data = {
             'header': self.__create_header('StartTranscription'),
             "payload": {
@@ -250,22 +366,35 @@ class ALiNls:
                 "speech_noise_threshold": -1
             }
         }
+
+        print(f"[ALiNls-{self.username}] 准备发送启动转录命令")
+        print(f"[ALiNls-{self.username}] 启动命令详情: {json.dumps(data, indent=2)}")
+
         self.send(data)
-        print(f"[ALiNls-{self.username}] 发送启动转录命令")
+        print(f"[ALiNls-{self.username}] 启动转录命令已加入发送队列")
 
     def end(self):
-        print(f"[ALiNls-{self.username}] 结束ASR会话")
+        print(f"[ALiNls-{self.username}] 结束ASR会话...")
         self.__endding = True
 
         # 保存音频数据
         if len(self.data) > 0:
-            with wave.open('cache_data/input2.wav', 'wb') as wf:
-                n_channels = 1
-                sampwidth = 2
-                wf.setnchannels(n_channels)
-                wf.setsampwidth(sampwidth)
-                wf.setframerate(16000)
-                wf.writeframes(self.data)
-            print(f"[ALiNls-{self.username}] 音频数据已保存: {len(self.data)} bytes")
+            try:
+                import os
+                os.makedirs('cache_data', exist_ok=True)
+                with wave.open('cache_data/input2.wav', 'wb') as wf:
+                    n_channels = 1
+                    sampwidth = 2
+                    wf.setnchannels(n_channels)
+                    wf.setsampwidth(sampwidth)
+                    wf.setframerate(16000)
+                    wf.writeframes(self.data)
+                print(
+                    f"[ALiNls-{self.username}] ✓ 音频数据已保存: {len(self.data)} bytes -> cache_data/input2.wav")
+            except Exception as e:
+                print(f"[ALiNls-{self.username}] 保存音频数据时出错: {e}")
+        else:
+            print(f"[ALiNls-{self.username}] 没有音频数据需要保存")
 
         self.data = b''
+        print(f"[ALiNls-{self.username}] ASR会话已结束")
