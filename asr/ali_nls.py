@@ -92,6 +92,11 @@ class ALiNls:
         self.result_callback = None  # 添加回调函数
         print("aliyun asr created")
 
+        # 添加静音数据和时间跟踪
+        self.__silence_data = bytes(32)  # 32字节的静音数据(1毫秒)
+        self.__last_send_time = 0  # 最后发送数据的时间
+        self.__keepalive_interval = 5.0  # 5秒无数据时发送静音包
+
     def set_result_callback(self, callback):
         """设置结果回调函数"""
         self.result_callback = callback
@@ -242,14 +247,23 @@ class ALiNls:
         def run(*args):
             sent_packets = 0
             sent_bytes = 0
-            last_log_time = time.time()
             start_command_sent = False
+            self.__last_send_time = time.time()  # 初始化发送时间
 
             print(f"[ALiNls-{self.username}] 发送线程已启动")
 
             while self.__endding == False:
                 try:
                     current_time = time.time()
+
+                    # 检查是否需要发送保活静音包
+                    if (current_time - self.__last_send_time > self.__keepalive_interval and
+                            start_command_sent and len(self.__frames) == 0):
+                        print(
+                            f"[ALiNls-{self.username}] 发送保活静音包 (距上次发送: {current_time - self.__last_send_time:.1f}秒)")
+                        ws.send(self.__silence_data,
+                                websocket.ABNF.OPCODE_BINARY)
+                        self.__last_send_time = current_time
 
                     if len(self.__frames) > 0:
                         with self.lock:
@@ -262,43 +276,28 @@ class ALiNls:
                                 'header', {}).get('name', 'Unknown')
                             print(
                                 f"[ALiNls-{self.username}] → 发送控制消息: {frame_name}")
-                            print(
-                                f"[ALiNls-{self.username}] 控制消息内容: {message_json}")
                             if frame_name == 'StartTranscription':
                                 start_command_sent = True
                                 print(
-                                    f"[ALiNls-{self.username}] ✓ StartTranscription命令已发送，等待服务器响应...")
+                                    f"[ALiNls-{self.username}] ✓ StartTranscription命令已发送")
+                            self.__last_send_time = current_time
 
                         elif isinstance(frame, bytes):
-                            if not start_command_sent:
-                                print(
-                                    f"[ALiNls-{self.username}] ⚠ 警告：在StartTranscription命令发送前收到音频数据")
-
                             ws.send(frame, websocket.ABNF.OPCODE_BINARY)
                             self.data += frame
                             sent_packets += 1
                             sent_bytes += len(frame)
+                            self.__last_send_time = current_time  # 更新发送时间
 
-                            # 分析音频数据
-                            import struct
-                            if len(frame) >= 2:
-                                samples = struct.unpack(
-                                    '<' + 'h' * min(4, len(frame)//2), frame[:8])
-                                max_sample = max(abs(s)
-                                                 for s in samples) if samples else 0
-
-                                # 每5秒或每50个包输出一次统计
-                                if (sent_packets % 50 == 0 or
-                                        current_time - last_log_time >= 5):
-                                    print(f"[ALiNls-{self.username}] → 已发送音频 - 包数: {sent_packets}, "
-                                          f"字节数: {sent_bytes}, 队列剩余: {len(self.__frames)}, 最大采样值: {max_sample}")
-                                    last_log_time = current_time
+                            # 定期输出统计
+                            if sent_packets % 50 == 0:
+                                print(
+                                    f"[ALiNls-{self.username}] → 已发送音频包: {sent_packets}, 字节: {sent_bytes}")
                     else:
-                        time.sleep(0.001)  # 避免忙等
+                        time.sleep(0.01)  # 短暂休眠
 
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送数据时出错: {e}")
-                    print(f"[ALiNls-{self.username}] 错误类型: {type(e).__name__}")
                     import traceback
                     traceback.print_exc()
                     break
@@ -306,31 +305,17 @@ class ALiNls:
             print(
                 f"[ALiNls-{self.username}] 发送线程结束 - 总发送: {sent_packets}包, {sent_bytes}字节")
 
-            # 发送剩余数据和停止命令
+            # 发送停止命令
             if self.__is_close == False:
-                remaining_frames = len(self.__frames)
-                if remaining_frames > 0:
-                    print(
-                        f"[ALiNls-{self.username}] 发送剩余 {remaining_frames} 个音频帧")
-                    try:
-                        for frame in self.__frames:
-                            ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                            print(
-                                f"[ALiNls-{self.username}] → 发送剩余音频帧: {len(frame)} bytes")
-                    except Exception as e:
-                        print(f"[ALiNls-{self.username}] 发送剩余帧时出错: {e}")
-
                 try:
                     frame = {"header": self.__create_header(
                         'StopTranscription')}
                     stop_message = json.dumps(frame)
                     ws.send(stop_message)
                     print(f"[ALiNls-{self.username}] → 发送停止转录命令")
-                    print(f"[ALiNls-{self.username}] 停止命令内容: {stop_message}")
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送停止命令时出错: {e}")
 
-        # 修正：将线程启动移到函数定义外部
         thread.start_new_thread(run, ())
 
     def __connect(self):
