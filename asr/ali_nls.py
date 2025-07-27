@@ -243,6 +243,7 @@ class ALiNls:
             sent_packets = 0
             sent_bytes = 0
             last_log_time = time.time()
+            start_command_sent = False
 
             print(f"[ALiNls-{self.username}] 发送线程已启动")
 
@@ -263,19 +264,35 @@ class ALiNls:
                                 f"[ALiNls-{self.username}] → 发送控制消息: {frame_name}")
                             print(
                                 f"[ALiNls-{self.username}] 控制消息内容: {message_json}")
+                            if frame_name == 'StartTranscription':
+                                start_command_sent = True
+                                print(
+                                    f"[ALiNls-{self.username}] ✓ StartTranscription命令已发送，等待服务器响应...")
 
                         elif isinstance(frame, bytes):
+                            if not start_command_sent:
+                                print(
+                                    f"[ALiNls-{self.username}] ⚠ 警告：在StartTranscription命令发送前收到音频数据")
+
                             ws.send(frame, websocket.ABNF.OPCODE_BINARY)
                             self.data += frame
                             sent_packets += 1
                             sent_bytes += len(frame)
 
-                            # 每5秒或每50个包输出一次统计
-                            if (sent_packets % 50 == 0 or
-                                    current_time - last_log_time >= 5):
-                                print(f"[ALiNls-{self.username}] → 已发送音频 - 包数: {sent_packets}, "
-                                      f"字节数: {sent_bytes}, 队列剩余: {len(self.__frames)}")
-                                last_log_time = current_time
+                            # 分析音频数据
+                            import struct
+                            if len(frame) >= 2:
+                                samples = struct.unpack(
+                                    '<' + 'h' * min(4, len(frame)//2), frame[:8])
+                                max_sample = max(abs(s)
+                                                 for s in samples) if samples else 0
+
+                                # 每5秒或每50个包输出一次统计
+                                if (sent_packets % 50 == 0 or
+                                        current_time - last_log_time >= 5):
+                                    print(f"[ALiNls-{self.username}] → 已发送音频 - 包数: {sent_packets}, "
+                                          f"字节数: {sent_bytes}, 队列剩余: {len(self.__frames)}, 最大采样值: {max_sample}")
+                                    last_log_time = current_time
                     else:
                         time.sleep(0.001)  # 避免忙等
 
@@ -313,7 +330,7 @@ class ALiNls:
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送停止命令时出错: {e}")
 
-        thread.start_new_thread(run, ())
+            thread.start_new_thread(run, ())
 
     def __connect(self):
         try:
@@ -358,8 +375,18 @@ class ALiNls:
             self.__frames.append(buf)
             # 添加音频数据接收日志
             if isinstance(buf, bytes):
-                print(
-                    f"[ALiNls-{self.username}] ← 接收音频数据: {len(buf)} bytes, 队列长度: {len(self.__frames)}")
+                # 分析音频数据特征
+                import struct
+                if len(buf) >= 2:
+                    # 检查前几个采样点
+                    samples = struct.unpack(
+                        '<' + 'h' * min(8, len(buf)//2), buf[:16])
+                    max_sample = max(abs(s) for s in samples) if samples else 0
+                    print(
+                        f"[ALiNls-{self.username}] ← 接收音频数据: {len(buf)} bytes, 队列长度: {len(self.__frames)}, 最大采样值: {max_sample}")
+                else:
+                    print(
+                        f"[ALiNls-{self.username}] ← 接收音频数据: {len(buf)} bytes, 队列长度: {len(self.__frames)}")
             elif isinstance(buf, dict):
                 frame_name = buf.get('header', {}).get('name', 'Unknown')
                 print(f"[ALiNls-{self.username}] ← 接收控制消息: {frame_name}")
