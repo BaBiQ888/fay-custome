@@ -176,6 +176,66 @@ class ASRWebSocketServer:
                         first_audio_time = current_time
                     last_audio_time = current_time
 
+                    # 检查ASR实例状态
+                    if not asr_instance:
+                        logger.warning(
+                            f"[{client_id}] 收到音频数据但ASR实例不存在 - 包#{audio_packet_count}")
+                        continue
+
+                    # 检查ASR连接状态
+                    if hasattr(asr_instance, '_ALiNls__is_close') and asr_instance._ALiNls__is_close:
+                        logger.warning(f"[{client_id}] ASR连接已断开，尝试重新连接...")
+
+                        # 重新启动ASR实例
+                        try:
+                            asr_instance.end()
+
+                            # 创建新实例
+                            asr_mode = self.clients[client_id].get(
+                                'mode', 'ali')
+                            asr_instance = self._create_asr_instance(
+                                asr_mode, client_id)
+
+                            # 重新设置回调
+                            def result_callback(text, is_final):
+                                try:
+                                    logger.info(
+                                        f"[{client_id}] 收到ASR结果: text='{text}', is_final={is_final}")
+                                    result_message = json.dumps({
+                                        'type': 'result',
+                                        'text': text,
+                                        'is_final': is_final,
+                                        'timestamp': time.time()
+                                    })
+                                    future = asyncio.run_coroutine_threadsafe(
+                                        websocket.send(
+                                            result_message), self.loop
+                                    )
+                                    future.result(timeout=1.0)
+                                except Exception as e:
+                                    logger.error(f"[{client_id}] 回调执行出错: {e}")
+
+                            asr_instance.set_result_callback(result_callback)
+                            asr_instance.start()
+
+                            # 等待连接建立
+                            wait_start = time.time()
+                            while (time.time() - wait_start) < 10.0:
+                                if asr_instance.started and not asr_instance._ALiNls__is_close:
+                                    print(f"[ASR-Server] ✅ ASR重连成功")
+                                    break
+                                await asyncio.sleep(0.1)
+                            else:
+                                logger.error(f"[{client_id}] ASR重连失败")
+                                continue
+
+                            # 更新客户端状态
+                            self.clients[client_id]['asr'] = asr_instance
+
+                        except Exception as e:
+                            logger.error(f"[{client_id}] ASR重连过程出错: {e}")
+                            continue
+
                     # 发送音频数据
                     if (asr_instance and
                         client_id in self.clients and

@@ -215,6 +215,13 @@ class ALiNls:
         elif code is None:
             print(f"[ALiNls-{self.username}] ❌ 连接立即断开，可能是Token或网络问题")
 
+        # 清空待发送队列，避免积压
+        with self.lock:
+            queue_size = len(self.__frames)
+            self.__frames.clear()
+            if queue_size > 0:
+                print(f"[ALiNls-{self.username}] 清空待发送队列: {queue_size} 个数据包")
+
     # 收到websocket错误的处理
     def on_error(self, ws, error):
         print(f"[ALiNls-{self.username}] ✗ WebSocket错误: {error}")
@@ -406,6 +413,16 @@ class ALiNls:
 
     def send(self, buf):
         """发送音频数据到阿里云"""
+        # 检查连接状态
+        if self.__is_close or self.__endding:
+            print(f"[ALiNls-{self.username}] ⚠️ 连接已关闭，忽略音频数据")
+            return
+
+        # 检查WebSocket连接状态
+        if not self.__ws or not hasattr(self.__ws, 'sock') or not self.__ws.sock:
+            print(f"[ALiNls-{self.username}] ⚠️ WebSocket连接无效，忽略音频数据")
+            return
+
         with self.lock:
             self.__frames.append(buf)
             # 添加音频数据接收日志
@@ -479,3 +496,21 @@ class ALiNls:
 
         self.data = b''
         print(f"[ALiNls-{self.username}] ASR会话已结束")
+
+    def is_connected(self):
+        """检查连接是否正常"""
+        return (not self.__is_close and
+                not self.__endding and
+                self.__ws is not None and
+                hasattr(self.__ws, 'sock') and
+                self.__ws.sock is not None)
+
+    def get_connection_status(self):
+        """获取连接状态信息"""
+        return {
+            'is_close': self.__is_close,
+            'endding': self.__endding,
+            'started': self.started,
+            'ws_exists': self.__ws is not None,
+            'queue_size': len(self.__frames) if hasattr(self, '_ALiNls__frames') else 0
+        }
