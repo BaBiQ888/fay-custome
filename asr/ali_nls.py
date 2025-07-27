@@ -330,7 +330,8 @@ class ALiNls:
                 except Exception as e:
                     print(f"[ALiNls-{self.username}] 发送停止命令时出错: {e}")
 
-            thread.start_new_thread(run, ())
+        # 修正：将线程启动移到函数定义外部
+        thread.start_new_thread(run, ())
 
     def __connect(self):
         try:
