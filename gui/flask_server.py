@@ -391,10 +391,10 @@ def api_send_v1_chat_completions():
             interact.data["msg"]), time.time())
 
         # # 确保Fay服务正在运行
-        # if not ensure_fay_service_running():
-        #     return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
+        if not ensure_fay_service_running():
+            return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
 
-        # fay_booter.feiFei.on_interact(interact)
+        fay_booter.feiFei.on_interact(interact)
 
         # 检查请求中是否指定了流式传输
         stream_requested = data.get('stream', False)
@@ -1086,8 +1086,8 @@ def run():
     class NullLogHandler:
         def write(self, *args, **kwargs):
             pass
-    if not ensure_fay_service_running():
-        return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
+    # if not ensure_fay_service_running():
+    #     return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
     server = pywsgi.WSGIServer(
         ('0.0.0.0', 5001),
         __app,
