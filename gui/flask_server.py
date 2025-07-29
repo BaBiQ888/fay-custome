@@ -1086,14 +1086,14 @@ def run():
     class NullLogHandler:
         def write(self, *args, **kwargs):
             pass
+    if not ensure_fay_service_running():
+        return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
     server = pywsgi.WSGIServer(
         ('0.0.0.0', 5001),
         __app,
         log=NullLogHandler()
     )
     server.serve_forever()
-    if not ensure_fay_service_running():
-        return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
 
 
 def start():
