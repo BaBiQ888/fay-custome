@@ -1092,6 +1092,8 @@ def run():
         log=NullLogHandler()
     )
     server.serve_forever()
+    if not ensure_fay_service_running():
+        return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
 
 
 def start():
