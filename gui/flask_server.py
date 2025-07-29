@@ -390,9 +390,9 @@ def api_send_v1_chat_completions():
         util.printInfo(1, username, '[文字沟通接口]{}'.format(
             interact.data["msg"]), time.time())
 
-        # 确保Fay服务正在运行
-        if not ensure_fay_service_running():
-            return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
+        # # 确保Fay服务正在运行
+        # if not ensure_fay_service_running():
+        #     return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
 
         # fay_booter.feiFei.on_interact(interact)
 
