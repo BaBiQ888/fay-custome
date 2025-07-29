@@ -984,7 +984,7 @@ def get_tts_voice_style(voice_id=None):
 
         # 根据TTS模块返回默认值
         if config_util.tts_module == 'ali':
-            return "阿斌"
+            return "知小夏"
         elif config_util.tts_module == 'volcano':
             return "爽快思思/Skye"
         elif config_util.tts_module in ['gptsovits', 'gptsovits_v3']:
