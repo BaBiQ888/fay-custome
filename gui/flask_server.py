@@ -313,8 +313,8 @@ def api_send():
             interact.data["msg"]), time.time())
 
         # 确保Fay服务正在运行
-        if not ensure_fay_service_running():
-            return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
+        # if not ensure_fay_service_running():
+        #     return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
 
         fay_booter.feiFei.on_interact(interact)
         return '{"result":"successful"}'
@@ -389,12 +389,6 @@ def api_send_v1_chat_completions():
                             'user': username, 'msg': last_content, 'observation': str(observation)})
         util.printInfo(1, username, '[文字沟通接口]{}'.format(
             interact.data["msg"]), time.time())
-
-        # # 确保Fay服务正在运行
-        if not ensure_fay_service_running():
-            return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
-
-        fay_booter.feiFei.on_interact(interact)
 
         # 检查请求中是否指定了流式传输
         stream_requested = data.get('stream', False)
@@ -1083,11 +1077,32 @@ def api_get_tts_config():
 
 
 def run():
+    # 确保Fay服务完全启动
+    util.log(1, "正在启动Fay核心服务...")
+
+    # 如果服务未运行，启动服务
+    if not fay_booter.is_running():
+        util.log(1, "检测到Fay服务未启动，正在启动...")
+        fay_booter.start()
+
+    # 等待feiFei对象创建完成
+    max_wait = 60  # 最多等待60秒
+    for i in range(max_wait):
+        if fay_booter.feiFei is not None:
+            util.log(1, "Fay服务启动成功，开始启动Flask服务器")
+            break
+        time.sleep(1)
+        if i % 10 == 0:  # 每10秒打印一次状态
+            util.log(1, f"等待Fay服务启动... ({i+1}/{max_wait})")
+
+    if fay_booter.feiFei is None:
+        util.log(1, "Fay服务启动失败，无法启动Flask服务器")
+        return
+
     class NullLogHandler:
         def write(self, *args, **kwargs):
             pass
-    # if not ensure_fay_service_running():
-    #     return jsonify({'result': 'error', 'message': 'Fay服务未启动或启动失败，请检查配置'})
+
     server = pywsgi.WSGIServer(
         ('0.0.0.0', 5001),
         __app,
