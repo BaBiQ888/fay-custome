@@ -394,6 +394,8 @@ def api_send_v1_chat_completions():
         if not ensure_fay_service_running():
             return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
 
+        fay_booter.feiFei.on_interact(interact)
+
         # 检查请求中是否指定了流式传输
         stream_requested = data.get('stream', False)
 
