@@ -869,6 +869,8 @@ def api_tts():
             username = data.get(
                 'username', request.form.get('username', 'TTS_User'))
 
+        util.log(1, f"voiceId: {voice_id}")
+
         if not content or content.strip() == '':
             return jsonify({'error': '内容不能为空'}), 400
 
@@ -923,6 +925,8 @@ def synthesize_tts_only(text, voice_id=None, username='TTS_User'):
 
         # 获取语音风格
         mood_voice = get_tts_voice_style(voice_id)
+
+        util.log(1, f'语音风格{mood_voice}')
 
         # 开始合成
         tm = time.time()
