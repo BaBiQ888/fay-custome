@@ -98,7 +98,7 @@ class Speech:
                 # text = f"<speak>{text}</speak>"
                 # 设置HTTPS Body。
                 body = {'appkey': self.ali_nls_app_key, 'token': self.token, 'speech_rate': 0, 'text': text,
-                        'format': 'mp3', 'sample_rate': 16000, 'voice': config_util.config["attribute"]["voice"]}
+                        'format': 'mp3', 'sample_rate': 16000, 'voice': 'zhixiaomei'}
                 body = json.dumps(body)
                 conn = http.client.HTTPSConnection(host)
                 conn.request(method='POST', url=url,
