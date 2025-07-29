@@ -354,7 +354,7 @@ def start():
     global socket_service_instance
 
     util.log(1, '开启服务...')
-    # 不要立即设置 __running = True，等所有组件初始化完成后再设置
+    __running = True
 
     # 读取配置
     util.log(1, '读取配置...')
@@ -395,8 +395,6 @@ def start():
     util.log(1, '启动自动播报服务...')
     MyThread(target=start_auto_play_service).start()
 
-    # 所有组件初始化完成后才设置运行状态
-    __running = True
     util.log(1, '服务启动完成!')
 
 
