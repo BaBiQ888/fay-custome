@@ -150,6 +150,12 @@ if __name__ == '__main__':
     from faymcp import mcp_service
     MyThread(target=mcp_service.start).start()
 
+    # 启动统一ASR+LLM+TTS服务
+    util.log(1, '启动统一ASR+LLM+TTS服务...')
+    from core.unified_asr_llm_tts_service import start_unified_service
+    unified_service = start_unified_service()
+    print("统一ASR+LLM+TTS服务已启动在端口 10004")
+
     # 监听控制台
     util.log(1, '注册命令...')
     MyThread(target=console_listener).start()

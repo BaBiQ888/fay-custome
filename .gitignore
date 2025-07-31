@@ -146,3 +146,6 @@ verifier.json
 samples
 logs
 cache_data
+.DS_Store
+test_audio/
+*.md
