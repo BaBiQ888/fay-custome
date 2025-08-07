@@ -566,6 +566,13 @@ class UnifiedASRLLMTTSService:
                 logger.error(f"[{client_id}] 音频文件不存在: {audio_file}")
                 return
 
+            # 🔧 检查音频文件格式
+            file_ext = os.path.splitext(audio_file)[1].lower()
+            if file_ext == '.mp3':
+                logger.warning(
+                    f"[{client_id}] 检测到MP3格式，客户端可能无法处理: {audio_file}")
+                # 可以在这里添加格式转换逻辑
+
             # 读取音频文件
             with open(audio_file, 'rb') as f:
                 audio_data = f.read()
@@ -574,23 +581,26 @@ class UnifiedASRLLMTTSService:
                 logger.error(f"[{client_id}] 音频文件为空: {audio_file}")
                 return
 
-            # 发送音频开始元数据
+            # 🔧 添加音频格式信息到元数据
             start_message = json.dumps({
                 'type': 'audio_start',
                 'text': text,
                 'is_first': is_first,
                 'total_size': len(audio_data),
+                'format': file_ext[1:] if file_ext else 'unknown',  # 添加格式信息
+                'sample_rate': 16000,  # 添加采样率信息
+                'channels': 1,         # 添加声道信息
                 'timestamp': time.time()
             })
             await websocket.send(start_message)
 
-            # 分块发送音频数据
+            # 🔧 调整分块大小和发送间隔
             chunk_size = 8192  # 8KB chunks
             for i in range(0, len(audio_data), chunk_size):
                 chunk = audio_data[i:i + chunk_size]
                 await websocket.send(chunk)
                 # 小延迟避免过快发送
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(0.001)  # 可能太快，导致客户端处理不及时
 
             # 发送音频结束元数据
             end_message = json.dumps({
@@ -598,12 +608,13 @@ class UnifiedASRLLMTTSService:
                 'text': text,
                 'is_end': is_end,
                 'total_size': len(audio_data),
+                'format': file_ext[1:] if file_ext else 'unknown',
                 'timestamp': time.time()
             })
             await websocket.send(end_message)
 
             logger.info(
-                f"[{client_id}] 音频文件发送完成: {audio_file} ({len(audio_data)} bytes)")
+                f"[{client_id}] 音频文件发送完成: {audio_file} ({len(audio_data)} bytes, {file_ext})")
 
             # 清理临时文件
             try:

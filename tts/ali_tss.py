@@ -8,6 +8,8 @@ import time
 from utils import util, config_util
 from utils import config_util as cfg
 import wave
+import subprocess
+import os
 
 
 class Speech:
@@ -109,13 +111,32 @@ class Speech:
                 contentType = response.getheader('Content-Type')
                 body = response.read()
                 if 'audio/mpeg' == contentType:
+                    # 🔧 修复：正确处理MP3格式
                     file_url = './samples/sample-' + \
                         str(int(time.time() * 1000)) + '.mp3'
-                    with wave.open(file_url, 'wb') as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(16000)
-                        wf.writeframes(body)
+
+                    # 直接保存MP3数据，不使用wave模块
+                    with open(file_url, 'wb') as f:
+                        f.write(body)
+
+                    # 🔧 如果需要转换为WAV格式供客户端使用
+                    # 可以使用ffmpeg或其他音频处理库进行转换
+                    try:
+                        # 使用ffmpeg转换MP3到WAV（如果可用）
+                        wav_file = file_url.replace('.mp3', '.wav')
+                        subprocess.run([
+                            'ffmpeg', '-i', file_url, '-ar', '16000', '-ac', '1',
+                            '-f', 'wav', wav_file, '-y'
+                        ], check=True, capture_output=True)
+
+                        # 删除临时MP3文件
+                        os.remove(file_url)
+                        file_url = wav_file
+
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        # 如果ffmpeg不可用，保持MP3格式
+                        util.log(1, "[⚠️] ffmpeg不可用，保持MP3格式")
+                        pass
 
                 else:
                     util.log(1, "[x] 语音转换失败！")
