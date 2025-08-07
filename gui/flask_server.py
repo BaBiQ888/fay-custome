@@ -4,6 +4,7 @@ import time
 import os
 import pyaudio
 import re
+import math
 from flask import Flask, render_template, request, jsonify, Response, send_file
 from flask_cors import CORS
 import requests
@@ -843,6 +844,238 @@ def api_start_genagents():
     except Exception as e:
         util.log(1, f"启动决策分析页面时出错: {str(e)}")
         return jsonify({'success': False, 'message': f'启动决策分析页面时出错: {str(e)}'}), 500
+
+
+@__app.route('/tts', methods=['GET', 'POST'])
+def api_tts():
+    """
+    独立的TTS语音合成API
+    支持GET和POST请求
+    参数：
+    - content: 要合成的文本内容
+    - id: 语音ID/风格 (可选)
+    - username: 用户名 (可选，默认为TTS_User)
+    """
+    try:
+        # 获取参数
+        if request.method == 'GET':
+            content = request.args.get('content', '')
+            voice_id = request.args.get('id', '')
+            username = request.args.get('username', 'TTS_User')
+        else:  # POST
+            data = request.get_json() or {}
+            content = data.get('content', request.form.get('content', ''))
+            voice_id = data.get('id', request.form.get('id', ''))
+            username = data.get(
+                'username', request.form.get('username', 'TTS_User'))
+
+        if not content or content.strip() == '':
+            return jsonify({'error': '内容不能为空'}), 400
+
+        # 确保Fay服务正在运行
+        if not ensure_fay_service_running():
+            return jsonify({'error': 'Fay服务未启动或启动失败，请检查配置'}), 503
+
+        # 调用TTS合成
+        audio_file = synthesize_tts_only(content, voice_id, username)
+
+        if audio_file and os.path.exists(audio_file):
+            # 返回音频文件
+            return send_file(
+                audio_file,
+                mimetype='audio/mpeg' if audio_file.endswith(
+                    '.mp3') else 'audio/wav',
+                as_attachment=False,
+                download_name=os.path.basename(audio_file)
+            )
+        else:
+            return jsonify({'error': '语音合成失败或文件不存在'}), 500
+
+    except Exception as e:
+        return jsonify({'error': f'TTS服务出错: {e}'}), 500
+
+
+def synthesize_tts_only(text, voice_id=None, username='TTS_User'):
+    """
+    独立的TTS合成函数，从fay_core中提取语音合成逻辑
+    """
+    try:
+        # 获取项目根目录并确保samples目录存在
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+        samples_dir = os.path.join(project_root, 'samples')
+        os.makedirs(samples_dir, exist_ok=True)
+
+        # 获取Fay实例
+        fay_instance = fay_booter.feiFei
+        if not fay_instance:
+            util.log(1, "Fay实例未找到")
+            return None
+
+        # 过滤表情符号
+        filtered_text = fay_instance._FeiFei__remove_emojis(
+            text.replace("*", ""))
+        if not filtered_text or filtered_text.strip() == "":
+            util.log(1, "过滤后文本为空")
+            return None
+
+        util.printInfo(1, username, f'TTS合成音频: {filtered_text}')
+
+        # 获取语音风格
+        mood_voice = get_tts_voice_style(voice_id)
+
+        # 开始合成
+        tm = time.time()
+        result = fay_instance.sp.to_sample(filtered_text, mood_voice)
+
+        if result:
+            # 统一处理路径格式，确保使用绝对路径
+            if result.startswith('./samples/'):
+                # 处理 ./samples/ 格式
+                result = os.path.join(project_root, result[2:])
+            elif result.startswith('./'):
+                # 处理其他 ./ 开头的路径
+                result = os.path.join(project_root, result[2:])
+            elif not os.path.isabs(result):
+                # 如果不是绝对路径，假设文件在samples目录中
+                filename = os.path.basename(result)
+                result = os.path.join(samples_dir, filename)
+
+            # 验证文件是否存在
+            if os.path.exists(result):
+                util.printInfo(
+                    1, username, f"TTS合成完成. 耗时: {math.floor((time.time() - tm) * 1000)} ms 文件:{result}")
+                return result
+            else:
+                util.log(1, f"TTS合成的文件不存在: {result}")
+                util.log(1, f"项目根目录: {project_root}")
+                util.log(1, f"samples目录: {samples_dir}")
+                return None
+        else:
+            util.log(1, "TTS合成返回空结果")
+            return None
+
+    except Exception as e:
+        util.log(1, f"TTS合成出错: {e}")
+        return None
+
+
+def get_tts_voice_style(voice_id=None):
+    """
+    获取TTS语音风格
+    """
+    try:
+        if voice_id and voice_id.strip():
+            # 如果指定了voice_id，尝试使用
+            from tts import tts_voice
+            voice = tts_voice.get_voice_of(voice_id)
+            if voice:
+                return voice_id
+
+        # 使用默认配置的语音
+        default_voice = config_util.config.get(
+            "attribute", {}).get("voice", "")
+        if default_voice and default_voice.strip():
+            return default_voice
+
+        # 根据TTS模块返回默认值
+        if config_util.tts_module == 'ali':
+            return "阿斌"
+        elif config_util.tts_module == 'volcano':
+            return "爽快思思/Skye"
+        elif config_util.tts_module in ['gptsovits', 'gptsovits_v3']:
+            return "default"
+        else:  # ms_tts_sdk
+            return "晓晓(edge)"
+
+    except Exception as e:
+        util.log(1, f"获取语音风格出错: {e}")
+        return "default"
+
+
+@__app.route('/tts/voices', methods=['GET'])
+def api_get_tts_voices():
+    """
+    获取可用的TTS语音列表
+    """
+    try:
+        config_util.load_config()
+        voice_list = []
+
+        if config_util.tts_module == 'ali':
+            voice_list = [
+                {"id": "abin", "name": "阿斌"},
+                {"id": "zhixiaobai", "name": "知小白"},
+                {"id": "zhixiaoxia", "name": "知小夏"},
+                {"id": "zhixiaomei", "name": "知小妹"},
+                {"id": "zhigui", "name": "知柜"},
+                {"id": "zhishuo", "name": "知硕"},
+                {"id": "aixia", "name": "艾夏"},
+                {"id": "zhifeng_emo", "name": "知锋_多情感"},
+                {"id": "zhibing_emo", "name": "知冰_多情感"},
+                {"id": "zhimiao_emo", "name": "知妙_多情感"},
+                {"id": "zhimi_emo", "name": "知米_多情感"},
+                {"id": "zhiyan_emo", "name": "知燕_多情感"},
+                {"id": "zhibei_emo", "name": "知贝_多情感"},
+                {"id": "zhitian_emo", "name": "知甜_多情感"}
+            ]
+        elif config_util.tts_module == 'volcano':
+            voice_list = [
+                {"id": "BV001_streaming", "name": "通用女声"},
+                {"id": "BV002_streaming", "name": "通用男声"},
+                {"id": "zh_male_jingqiangkanye_moon_bigtts", "name": "京腔侃爷/Harmony"},
+                {"id": "zh_female_shuangkuaisisi_moon_bigtts", "name": "爽快思思/Skye"},
+                {"id": "zh_male_wennuanahu_moon_bigtts", "name": "温暖阿虎/Alvin"},
+                {"id": "zh_female_wanwanxiaohe_moon_bigtts", "name": "湾湾小何"}
+            ]
+        else:
+            # 其他TTS模块
+            from tts import tts_voice
+            voices = tts_voice.get_voice_list()
+            for voice in voices:
+                voice_data = voice.value
+                voice_list.append({
+                    "id": voice_data['name'],
+                    "name": voice_data['name']
+                })
+
+        return jsonify({
+            'success': True,
+            'voices': voice_list,
+            'current_module': config_util.tts_module
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'获取语音列表失败: {e}'
+        }), 500
+
+
+@__app.route('/tts/config', methods=['GET'])
+def api_get_tts_config():
+    """
+    获取当前TTS配置信息
+    """
+    try:
+        config_util.load_config()
+
+        return jsonify({
+            'success': True,
+            'config': {
+                'tts_module': config_util.tts_module,
+                'default_voice': config_util.config.get("attribute", {}).get("voice", ""),
+                'sample_rate': 16000,  # 大多数TTS模块使用16kHz
+                'supported_formats': ['wav', 'mp3'],
+                'max_text_length': 1000  # 建议的最大文本长度
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'获取TTS配置失败: {e}'
+        }), 500
 
 
 def run():

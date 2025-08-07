@@ -1,8 +1,9 @@
 import requests
 import json
 
+
 def test_gpt(prompt):
-    url = 'http://127.0.0.1:5000/v1/chat/completions'  # 替换为您的接口地址
+    url = 'http://127.0.0.1:5001/v1/chat/completions'  # 替换为您的接口地址
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer YOUR_API_KEY',  # 如果您的接口需要身份验证
@@ -15,7 +16,8 @@ def test_gpt(prompt):
         'stream': True  # 启用流式传输
     }
 
-    response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+    response = requests.post(url, headers=headers,
+                             data=json.dumps(data), stream=True)
 
     if response.status_code != 200:
         print(f"请求失败，状态码：{response.status_code}")
@@ -44,6 +46,7 @@ def test_gpt(prompt):
                     print(f"\n无法解析的 JSON 数据：{line}")
             else:
                 print(f"\n收到未知格式的数据：{line}")
+
 
 if __name__ == "__main__":
     user_input = "你好"

@@ -7,6 +7,7 @@ import time
 
 app = Flask(__name__)
 
+
 @app.route('/get_auto_play_item', methods=['POST'])
 def get_wav():
     # 获取用户标识（例如，通过POST请求中的JSON数据）
@@ -14,7 +15,7 @@ def get_wav():
     # user = data.get('user', 'User')
 
     # 模拟WAV文件的URL（这里假设是某个静态文件服务的URL）
-    wav_url = ""#f"http://120.79.187.154:5000/audio/sample-1729231423801.wav"
+    wav_url = ""  # f"http://120.79.187.154:5001/audio/sample-1729231423801.wav"
 
     # 模拟返回的文本
     response_text = "今天天气晴朗，适合外出哦！你有什么计划吗？" + str(time.time())
@@ -30,6 +31,7 @@ def get_wav():
     }
 
     return jsonify(response)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=6000)

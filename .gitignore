@@ -143,4 +143,6 @@ verifier.json
 
 ./test
 
-./samples
+samples
+logs
+cache_data
