@@ -17,6 +17,7 @@ import queue
 import os
 from typing import Dict, Any
 from threading import Thread, Lock
+import subprocess
 
 # 导入现有ASR模块 - 直接复用成功的实现
 from asr.ali_nls import ALiNls
@@ -508,7 +509,47 @@ class UnifiedASRLLMTTSService:
             style = "normal"  # 默认风格
             logger.info(
                 f"[{client_id}] 开始TTS合成: text='{text}', style='{style}'")
-            audio_file = speech.to_sample(text, style)
+
+            # 🔧 新增：TTS重试机制
+            max_retries = 3
+            audio_file = None
+
+            for attempt in range(max_retries):
+                try:
+                    audio_file = speech.to_sample(text, style)
+
+                    if audio_file and os.path.exists(audio_file):
+                        # 🔧 新增：音频质量验证
+                        quality_check = self._validate_tts_audio(
+                            audio_file, text)
+                        if quality_check['is_valid']:
+                            logger.info(
+                                f"[{client_id}] TTS合成成功，质量检查通过: {audio_file}")
+                            break
+                        else:
+                            logger.warning(
+                                f"[{client_id}] TTS音频质量检查失败: {quality_check['reason']}")
+                            if attempt < max_retries - 1:
+                                logger.info(
+                                    f"[{client_id}] 尝试重新生成 (尝试 {attempt + 1}/{max_retries})")
+                                # 删除质量不合格的文件
+                                try:
+                                    os.remove(audio_file)
+                                except:
+                                    pass
+                                audio_file = None
+                                continue
+                    else:
+                        logger.warning(f"[{client_id}] TTS返回空文件或文件不存在")
+
+                except Exception as e:
+                    logger.error(
+                        f"[{client_id}] TTS合成异常 (尝试 {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"[{client_id}] 尝试重新生成...")
+                        continue
+                    else:
+                        raise e
 
             if audio_file and os.path.exists(audio_file):
                 logger.info(
@@ -526,11 +567,98 @@ class UnifiedASRLLMTTSService:
                     logger.error(f"[{client_id}] 事件循环不可用，无法发送音频文件")
             else:
                 logger.error(f"[{client_id}] TTS合成失败，未生成音频文件")
+                # 🔧 新增：发送TTS失败通知
+                self._send_tts_failure_notification(websocket, text, client_id)
 
         except Exception as e:
             logger.error(f"[{client_id}] TTS处理出错: {e}")
             import traceback
             logger.error(f"[{client_id}] TTS错误详情: {traceback.format_exc()}")
+
+            # 🔧 新增：发送TTS错误通知
+            self._send_tts_failure_notification(websocket, text, client_id)
+
+    # 🔧 新增：TTS音频质量验证
+    def _validate_tts_audio(self, audio_file: str, text: str) -> dict:
+        """验证TTS生成的音频质量"""
+        try:
+            if not os.path.exists(audio_file):
+                return {'is_valid': False, 'reason': '文件不存在'}
+
+            file_size = os.path.getsize(audio_file)
+
+            # 基本文件大小检查
+            if file_size < 1024:  # 小于1KB
+                return {'is_valid': False, 'reason': f'文件过小: {file_size} bytes'}
+
+            # 根据文本长度估算最小文件大小
+            min_expected_size = len(text) * 100  # 粗略估算：每个字符100字节
+            if file_size < min_expected_size:
+                return {'is_valid': False, 'reason': f'文件大小异常: {file_size} bytes, 期望至少 {min_expected_size} bytes'}
+
+            # 检查文件头
+            with open(audio_file, 'rb') as f:
+                header = f.read(16)
+
+            file_ext = os.path.splitext(audio_file)[1].lower()
+
+            if file_ext == '.wav':
+                # 检查WAV文件头
+                if header[:4] != b'RIFF' or header[8:12] != b'WAVE':
+                    return {'is_valid': False, 'reason': 'WAV文件头无效'}
+            elif file_ext == '.mp3':
+                # 检查MP3文件头
+                if not (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+                    return {'is_valid': False, 'reason': 'MP3文件头无效'}
+
+            # 获取音频详细信息
+            audio_info = self._get_audio_info(audio_file)
+
+            # 检查采样率
+            if audio_info.get('sample_rate', 0) < 8000:
+                return {'is_valid': False, 'reason': f'采样率过低: {audio_info.get("sample_rate")}Hz'}
+
+            # 检查时长
+            duration = audio_info.get('duration', 0)
+            if duration < 0.1:  # 少于100ms
+                return {'is_valid': False, 'reason': f'音频时长过短: {duration:.3f}秒'}
+
+            return {
+                'is_valid': True,
+                'file_size': file_size,
+                'format': file_ext,
+                'sample_rate': audio_info.get('sample_rate'),
+                'channels': audio_info.get('channels'),
+                'duration': duration,
+                'reason': '质量检查通过'
+            }
+
+        except Exception as e:
+            return {'is_valid': False, 'reason': f'验证异常: {str(e)}'}
+
+    # 🔧 新增：发送TTS失败通知
+    def _send_tts_failure_notification(self, websocket, text: str, client_id: str):
+        """发送TTS失败通知给客户端"""
+        try:
+            failure_message = json.dumps({
+                'type': 'tts_failure',
+                'text': text,
+                'reason': 'TTS合成失败',
+                'timestamp': time.time()
+            })
+
+            loop = self.loop
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send(failure_message),
+                    loop
+                )
+                logger.info(f"[{client_id}] TTS失败通知已发送")
+            else:
+                logger.error(f"[{client_id}] 事件循环不可用，无法发送TTS失败通知")
+
+        except Exception as e:
+            logger.error(f"[{client_id}] 发送TTS失败通知异常: {e}")
 
     def _get_tts_speech_class(self):
         """动态获取TTS Speech类 - 完全复用现有配置逻辑"""
@@ -581,6 +709,23 @@ class UnifiedASRLLMTTSService:
                 logger.error(f"[{client_id}] 音频文件为空: {audio_file}")
                 return
 
+            # 🔧 优化：根据音频格式调整传输参数
+            if file_ext == '.wav':
+                # WAV格式：使用较大分块，减少发送次数
+                chunk_size = 16384  # 16KB chunks
+                send_delay = 0.005   # 5ms延迟
+            elif file_ext == '.mp3':
+                # MP3格式：使用较小分块，避免解码问题
+                chunk_size = 4096    # 4KB chunks
+                send_delay = 0.010   # 10ms延迟
+            else:
+                # 其他格式：默认参数
+                chunk_size = 8192    # 8KB chunks
+                send_delay = 0.008   # 8ms延迟
+
+            # 🔧 优化：添加音频质量信息
+            audio_info = self._get_audio_info(audio_file)
+
             # 🔧 添加音频格式信息到元数据
             start_message = json.dumps({
                 'type': 'audio_start',
@@ -588,19 +733,26 @@ class UnifiedASRLLMTTSService:
                 'is_first': is_first,
                 'total_size': len(audio_data),
                 'format': file_ext[1:] if file_ext else 'unknown',  # 添加格式信息
-                'sample_rate': 16000,  # 添加采样率信息
-                'channels': 1,         # 添加声道信息
+                'sample_rate': audio_info.get('sample_rate', 44100),  # 使用实际采样率
+                'channels': audio_info.get('channels', 1),         # 使用实际声道数
+                # 添加位深度
+                'bits_per_sample': audio_info.get('bits_per_sample', 16),
+                'duration': audio_info.get('duration', 0),         # 添加时长信息
+                'chunk_size': chunk_size,                         # 添加分块大小信息
                 'timestamp': time.time()
             })
             await websocket.send(start_message)
 
-            # 🔧 调整分块大小和发送间隔
-            chunk_size = 8192  # 8KB chunks
+            # 🔧 优化：智能分块发送
             for i in range(0, len(audio_data), chunk_size):
                 chunk = audio_data[i:i + chunk_size]
                 await websocket.send(chunk)
-                # 小延迟避免过快发送
-                await asyncio.sleep(0.001)  # 可能太快，导致客户端处理不及时
+
+                # 动态调整发送延迟
+                if i % (chunk_size * 10) == 0:  # 每10个块检查一次
+                    await asyncio.sleep(send_delay * 2)  # 稍微停顿
+                else:
+                    await asyncio.sleep(send_delay)
 
             # 发送音频结束元数据
             end_message = json.dumps({
@@ -609,6 +761,10 @@ class UnifiedASRLLMTTSService:
                 'is_end': is_end,
                 'total_size': len(audio_data),
                 'format': file_ext[1:] if file_ext else 'unknown',
+                'sample_rate': audio_info.get('sample_rate', 44100),
+                'channels': audio_info.get('channels', 1),
+                'bits_per_sample': audio_info.get('bits_per_sample', 16),
+                'duration': audio_info.get('duration', 0),
                 'timestamp': time.time()
             })
             await websocket.send(end_message)
@@ -625,6 +781,56 @@ class UnifiedASRLLMTTSService:
 
         except Exception as e:
             logger.error(f"[{client_id}] 发送音频文件失败: {e}")
+
+    # 🔧 新增：获取音频文件信息
+    def _get_audio_info(self, audio_file: str) -> dict:
+        """获取音频文件信息"""
+        try:
+            if audio_file.endswith('.wav'):
+                import wave
+                with wave.open(audio_file, 'rb') as wav:
+                    return {
+                        'sample_rate': wav.getframerate(),
+                        'channels': wav.getnchannels(),
+                        'bits_per_sample': wav.getsampwidth() * 8,
+                        'duration': wav.getnframes() / wav.getframerate()
+                    }
+            elif audio_file.endswith('.mp3'):
+                # 使用ffprobe获取MP3信息
+                try:
+                    result = subprocess.run([
+                        'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                        '-show_format', '-show_streams', audio_file
+                    ], capture_output=True, text=True, check=True)
+
+                    info = json.loads(result.stdout)
+                    if 'streams' in info and len(info['streams']) > 0:
+                        stream = info['streams'][0]
+                        return {
+                            'sample_rate': int(stream.get('sample_rate', 44100)),
+                            'channels': int(stream.get('channels', 1)),
+                            'bits_per_sample': 16,  # MP3通常是16位
+                            'duration': float(info['format'].get('duration', 0))
+                        }
+                except Exception:
+                    pass
+
+            # 默认值
+            return {
+                'sample_rate': 44100,
+                'channels': 1,
+                'bits_per_sample': 16,
+                'duration': 0
+            }
+
+        except Exception as e:
+            logger.warning(f"获取音频信息失败: {e}")
+            return {
+                'sample_rate': 44100,
+                'channels': 1,
+                'bits_per_sample': 16,
+                'duration': 0
+            }
 
 
 class UnifiedClientSession:

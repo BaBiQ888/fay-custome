@@ -21,6 +21,27 @@ class Speech:
         self.authorize_tb = Authorize_Tb()
         self.__history_data = []
 
+        # 🔧 新增：确保必要的目录存在
+        self._ensure_directories()
+
+    def _ensure_directories(self):
+        """确保必要的目录存在"""
+        try:
+            # 创建samples目录
+            samples_dir = './samples'
+            if not os.path.exists(samples_dir):
+                os.makedirs(samples_dir)
+                print(f"✅ 创建目录: {samples_dir}")
+
+            # 创建temp目录
+            temp_dir = './temp'
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
+                print(f"✅ 创建目录: {temp_dir}")
+
+        except Exception as e:
+            print(f"⚠️ 创建目录失败: {e}")
+
     def connect(self):
         pass
 
@@ -31,6 +52,11 @@ class Speech:
         return None
 
     def set_token(self):
+        # 🔧 新增：配置验证
+        if not self._validate_config():
+            print("❌ TTS配置验证失败，请检查配置")
+            return
+
         token = self.__check_token()
         if token is None or token == 'expired':
             token_info = self.__get_token()
@@ -49,6 +75,28 @@ class Speech:
                 token = None
 
         self.token = token
+
+    def _validate_config(self) -> bool:
+        """验证TTS配置是否完整"""
+        try:
+            if not self.key_ali_nls_key_id or not self.key_ali_nls_key_id.strip():
+                print("❌ 阿里云TTS Key ID未配置")
+                return False
+
+            if not self.key_ali_nls_key_secret or not self.key_ali_nls_key_secret.strip():
+                print("❌ 阿里云TTS Key Secret未配置")
+                return False
+
+            if not self.ali_nls_app_key or not self.ali_nls_app_key.strip():
+                print("❌ 阿里云TTS App Key未配置")
+                return False
+
+            print("✅ TTS配置验证通过")
+            return True
+
+        except Exception as e:
+            print(f"❌ TTS配置验证异常: {e}")
+            return False
 
     def __check_token(self):
         self.authorize_tb.init_tb()
@@ -99,8 +147,18 @@ class Speech:
                 }
                 # text = f"<speak>{text}</speak>"
                 # 设置HTTPS Body。
-                body = {'appkey': self.ali_nls_app_key, 'token': self.token, 'speech_rate': 0, 'text': text,
-                        'format': 'mp3', 'sample_rate': 16000, 'voice': 'zhixiaomei'}
+                # 🔧 修复：改为WAV格式，使用标准采样率
+                body = {
+                    'appkey': self.ali_nls_app_key,
+                    'token': self.token,
+                    'speech_rate': 0,
+                    'text': text,
+                    'format': 'wav',           # ✅ 改为WAV格式（无损）
+                    'sample_rate': 44100,      # ✅ 使用标准采样率44.1kHz
+                    'voice': 'zhixiaomei',
+                    'bit_rate': 16,            # ✅ 添加位深度
+                    'channels': 1              # ✅ 明确声道数
+                }
                 body = json.dumps(body)
                 conn = http.client.HTTPSConnection(host)
                 conn.request(method='POST', url=url,
@@ -110,37 +168,67 @@ class Speech:
                 tt = time.time()
                 contentType = response.getheader('Content-Type')
                 body = response.read()
-                if 'audio/mpeg' == contentType:
-                    # 🔧 修复：正确处理MP3格式
-                    file_url = './samples/sample-' + \
-                        str(int(time.time() * 1000)) + '.mp3'
 
-                    # 直接保存MP3数据，不使用wave模块
+                # 🔧 修复：处理WAV格式响应
+                if 'audio/wav' == contentType or 'audio/x-wav' == contentType:
+                    # WAV格式处理
+                    file_url = './samples/sample-' + \
+                        str(int(time.time() * 1000)) + '.wav'
+
+                    # 直接保存WAV数据
                     with open(file_url, 'wb') as f:
                         f.write(body)
 
-                    # 🔧 如果需要转换为WAV格式供客户端使用
-                    # 可以使用ffmpeg或其他音频处理库进行转换
+                    # 🔧 新增：音频质量检查
+                    quality_check = self._check_audio_quality(file_url)
+                    if quality_check['is_valid']:
+                        util.log(
+                            1, f"[✅] TTS生成成功: {file_url}, 质量: {quality_check}")
+                    else:
+                        util.log(
+                            1, f"[⚠️] 音频质量检查失败: {quality_check['reason']}")
+                        # 可以尝试重新生成或使用备用方案
+
+                elif 'audio/mpeg' == contentType:
+                    # 🔧 兼容：如果返回MP3，转换为WAV
+                    util.log(1, "[⚠️] 服务端返回MP3格式，进行转换...")
+
+                    temp_mp3 = './temp/sample-' + \
+                        str(int(time.time() * 1000)) + '.mp3'
+                    wav_file = './samples/sample-' + \
+                        str(int(time.time() * 1000)) + '.wav'
+
+                    # 保存临时MP3
+                    with open(temp_mp3, 'wb') as f:
+                        f.write(body)
+
+                    # 转换为高质量WAV
                     try:
-                        # 使用ffmpeg转换MP3到WAV（如果可用）
-                        wav_file = file_url.replace('.mp3', '.wav')
                         subprocess.run([
-                            'ffmpeg', '-i', file_url, '-ar', '16000', '-ac', '1',
-                            '-f', 'wav', wav_file, '-y'
+                            'ffmpeg', '-i', temp_mp3,
+                            '-ar', '44100',        # 44.1kHz采样率
+                            '-ac', '1',            # 单声道
+                            '-acodec', 'pcm_s16le',  # 16位PCM编码
+                            '-f', 'wav',
+                            wav_file, '-y'
                         ], check=True, capture_output=True)
 
-                        # 删除临时MP3文件
-                        os.remove(file_url)
+                        # 清理临时文件
+                        os.remove(temp_mp3)
                         file_url = wav_file
 
-                    except (subprocess.CalledProcessError, FileNotFoundError):
-                        # 如果ffmpeg不可用，保持MP3格式
-                        util.log(1, "[⚠️] ffmpeg不可用，保持MP3格式")
-                        pass
+                        util.log(1, f"[✅] MP3转WAV成功: {wav_file}")
+
+                    except Exception as e:
+                        util.log(1, f"[⚠️] 格式转换失败，使用原始MP3: {e}")
+                        # 如果转换失败，重命名MP3文件
+                        os.rename(temp_mp3, wav_file.replace('.wav', '.mp3'))
+                        file_url = wav_file.replace('.wav', '.mp3')
 
                 else:
                     util.log(1, "[x] 语音转换失败！")
                     util.log(1, "[x] 原因: " + str(body))
+                    util.log(1, f"[x] Content-Type: {contentType}")
                     file_url = None
                     return file_url
                 conn.close()
@@ -155,6 +243,40 @@ class Speech:
             util.log(1, "[x] 原因: " + str(str(e)))
             file_url = None
             return file_url
+
+    # 🔧 新增：音频质量检查方法
+    def _check_audio_quality(self, audio_file: str) -> dict:
+        """检查音频文件质量"""
+        try:
+            if not os.path.exists(audio_file):
+                return {'is_valid': False, 'reason': '文件不存在'}
+
+            file_size = os.path.getsize(audio_file)
+            if file_size < 1024:  # 小于1KB
+                return {'is_valid': False, 'reason': '文件过小'}
+
+            # 检查文件头
+            with open(audio_file, 'rb') as f:
+                header = f.read(16)
+
+            if audio_file.endswith('.wav'):
+                # 检查WAV文件头
+                if header[:4] != b'RIFF' or header[8:12] != b'WAVE':
+                    return {'is_valid': False, 'reason': 'WAV文件头无效'}
+            elif audio_file.endswith('.mp3'):
+                # 检查MP3文件头
+                if not (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+                    return {'is_valid': False, 'reason': 'MP3文件头无效'}
+
+            return {
+                'is_valid': True,
+                'file_size': file_size,
+                'format': os.path.splitext(audio_file)[1],
+                'reason': '质量检查通过'
+            }
+
+        except Exception as e:
+            return {'is_valid': False, 'reason': f'检查异常: {str(e)}'}
 
     def close(self):
         pass
