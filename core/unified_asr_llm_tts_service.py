@@ -15,6 +15,7 @@ import time
 import threading
 import queue
 import os
+import re
 from typing import Dict, Any
 from threading import Thread, Lock
 import subprocess
@@ -397,22 +398,26 @@ class UnifiedASRLLMTTSService:
                         clean_sentence = sentence.replace(
                             "_<isfirst>", "").replace("_<isend>", "")
 
-                        if clean_sentence.strip():
+                        # 过滤动作描述
+                        filtered_sentence = self._filter_action_descriptions(
+                            clean_sentence)
+
+                        if filtered_sentence.strip():
                             logger.info(
-                                f"[{client_id}] LLM输出: {clean_sentence}")
+                                f"[{client_id}] LLM输出: {filtered_sentence}")
 
                             # 发送LLM结果给客户端
                             loop = self.loop
                             if loop and not loop.is_closed():
                                 asyncio.run_coroutine_threadsafe(
                                     self._send_llm_result(
-                                        websocket, clean_sentence, is_first, is_end),
+                                        websocket, filtered_sentence, is_first, is_end),
                                     loop
                                 )
 
                             # Phase 3: 调用TTS合成
                             self._process_with_tts(
-                                clean_sentence, is_first, is_end, websocket, client_id)
+                                filtered_sentence, is_first, is_end, websocket, client_id)
 
                     except Exception as e:
                         logger.error(f"[{client_id}] LLM回调处理出错: {e}")
@@ -831,6 +836,16 @@ class UnifiedASRLLMTTSService:
                 'bits_per_sample': 16,
                 'duration': 0
             }
+
+    def _filter_action_descriptions(self, text: str) -> str:
+        if not text:
+            return text
+        try:
+            text = re.sub(r"\*[^*]*\*", "", text)
+            text = re.sub(r"\n\s*\n", "\n", text).strip()
+            return text
+        except Exception:
+            return text
 
 
 class UnifiedClientSession:
